@@ -96,6 +96,12 @@ Names are in Russian because they go into the API `type` field and the UI.
 * **Example:** X-46 @11.
 * **Hard negative:** X-25 (cup on the desk, not drinking).
 
+### T12 «Передача банкнот клиенту у кассового стола» (CASH_HANDOVER_AT_DESK)
+* **Definition:** banknotes pass across the desk between the cashier and a visitor. Type confirmed by the team for X-1 @22.
+* **Visible cues:** a hand holding banknotes stretched across the desk toward the other person; hand-to-hand passing.
+* **Example:** X-1 @22 (cashier hand-counts notes from the machine, then passes them to the seated client at 22.5–23 s). X-2 @10 is also caught (client lays an item on the desk at 9 s), but its type is still unresolved.
+* **Hard negatives:** none separable. The VLM scores normal client transactions (X-3, X-5, X-19, X-35, X-37, X-39) as high as X-1, so T12 is recall-only for now. No verified rule is cited.
+
 ### Generic path «Визуальная аномалия относительно штатной процедуры» (VISUAL_ANOMALY)
 This is reserved for unseen types in the test (FAQ #9). It will be reported only with a strictly factual description and the rule field marked "not verified". The verdict policy for this path is Phase 3.
 

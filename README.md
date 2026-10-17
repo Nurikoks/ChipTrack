@@ -54,6 +54,7 @@ Cloudflare quick tunnel (`scripts\start_service.ps1 -Tunnel`) в нашей се
 | `FORTE_MAX_UPLOAD_MB` | 300 | максимальный размер файла |
 | `HF_HOME` | — | каталог с весами |
 | `FORTE_DEBUG` | 0 | добавить в ответ отладочный блок (для разработки) |
+| `FORTE_EXPERIMENTAL` | 1 | проверка T09 (приём сумки у инкассатора без документа); `0` — выключить |
 
 ## 2. API (для жюри)
 

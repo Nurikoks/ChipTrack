@@ -21,7 +21,8 @@ SAMPLE_FPS = float(os.environ.get("FORTE_SAMPLE_FPS", "2"))
 DUMMY = os.environ.get("FORTE_DUMMY", "0") == "1"
 # Adds a "debug" block (anchors, timeline, every VLM answer) to results. Off for the jury.
 DEBUG = os.environ.get("FORTE_DEBUG", "0") == "1"
-# Enables checks that could not be validated on the training data (currently: T09 collector document check).
-EXPERIMENTAL = os.environ.get("FORTE_EXPERIMENTAL", "0") == "1"
+# Checks that could not be fully validated on the training data (currently: T09 collector document check).
+# On by default: a missed violation is worse than a false alarm the reviewer dismisses.
+EXPERIMENTAL = os.environ.get("FORTE_EXPERIMENTAL", "1") == "1"
 
 ALLOWED_EXT = {".mov", ".mp4", ".m4v", ".avi", ".mkv"}

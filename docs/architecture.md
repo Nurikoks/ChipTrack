@@ -47,13 +47,16 @@
 | same | safe: door open at the moment of leaving **and** at the end of the absence, nobody beside it | T03 |
 | same | safe: key in lock (low recall, see limits) | T04 |
 | Entry within 40 s after an exit | desk tiles at +1/+2/+3 s: banknotes | T05 |
-| Entry with ≥ 2 people present, not a collector | standing person next to the worker at +1.5 s and +3 s; visitor not seated | T06 |
-| Entry into an empty room | door crop open at +3 s and +5 s | T07 |
+| Entry with ≥ 2 people present, not a collector | standing person next to the worker at +1.5 s **or** +3 s; visitor not seated | T06 |
+| Entry into an empty room | person walks on without returning to the door, door crop open; if the door box reaches the workplace (motion inconclusive), door crop open at +3 s | T07 |
 | Exit at the door, only the worker left, visitor chair empty | worker already counting or loading the machine at +1 s | T08 |
-| Entry carrying a green bag | document handover before the bag lies alone on the desk (**experimental, off by default**) | T09 |
+| Entry carrying a green bag | document handover before the bag lies alone on the desk (on by default; `FORTE_EXPERIMENTAL=0` disables) | T09 |
 | Periodic, every 4 s | full frame: coat/handbag on the desk (not the green cash bag) | T10 |
-| Periodic, every 4 s | full frame: drinking, confirmed again 1 s later | T11 |
+| Periodic, every 4 s | full frame: drinking, confirmed again 1 s later; vetoed when banknotes are in the hands (desk crop) | T11 |
 | Periodic, every 4 s | safe open with nobody at it, then checked every 2 s: open ≥ 9 s, or ≥ 5 s and still open at the end | T03 |
+| Every 1 s while ≥ 2 people are in the room | desk crop: banknotes handed across the desk; timecode = last frame of the run | T12 |
+
+Entries and exits come from two sources merged: room tracks that start/end at the grounded door, and sustained changes of the person count (catches people the tracker loses).
 
 **Adding a type** means adding one question, one trigger rule and one registry mapping. No retraining.
 
@@ -127,9 +130,11 @@ The 4B model (nf4, 0.47 s/question) separates screens and safes even better, but
 | Area | Limitation | Seen on |
 |---|---|---|
 | T04 key in lock | The key is ~3–5 px; neither the 2B nor the 4B VLM detects it even on upscaled crops. Recall is ≈0 unless the camera is closer | X-13, X-22 |
-| T09 collector without documents | Bag handover vs document handover can't be ordered reliably (one positive, one negative clip). **Disabled by default** (`FORTE_EXPERIMENTAL=1` enables it) | X-16, X-17 |
-| T07 door left open | Glass door state is ambiguous to the VLM (closed doors score 0.67–0.97). Low recall, capped confidence | X-32, X-33 |
-| T11 drinking | From behind, a cashier holding banknotes near the face can be read as drinking (2B), and neither face orientation nor a cup-in-hand gate fixes it | X-1, X-38 |
+| T09 collector without documents | Bag handover vs document handover can't be ordered reliably (one positive, one negative clip). On by default (recall first), so it also fires on the reference procedure X-16 | X-16, X-17 |
+| T07 door left open | Glass door state is ambiguous to the VLM (closed doors score 0.67–0.97). The door-state fallback catches X-33 but also fires on X-31, where the door was closed | X-31, X-33 |
+| T11 drinking | From behind, a cashier counting banknotes near the face was read as drinking. Fixed by a "banknotes in the hands" veto (0.81–0.99 on X-1 vs ≤ 0.17 while really drinking in X-46) | X-1 |
+| T12 cash handover at the desk | The VLM can't tell a violating handover from a normal one: it scores 0.9–1.0 on every client transaction, so T12 fires on most normal client clips too. No verified rule is cited | X-3, X-5, X-19, X-35, X-37, X-39 |
+| T06 extra person | A single confirmation also fires when a client walks up to the desk | X-12, X-19, X-35 |
 | T06 extra person | Depends on reliable entry detection; people walking behind the glass next to the door are filtered only by duration (≥ 5 s) | X-18 |
 | Small cash stacks | Tiling helps (X-4, X-46), but a small blue stack on a busy desk is still missed | X-38 |
 | Person count | People outside the glass wall are removed by the "track reaches the room" rule; in layouts where the glass line meets the desk edge, some remain | X-4, X-34 |
@@ -140,5 +145,5 @@ The 4B model (nf4, 0.47 s/question) separates screens and safes even better, but
 
 ## 8. Verdict policy
 
-* `violation` if at least one finding passes its threshold. Thresholds are set recall-first on the probe set, then raised only where the training clips show false positives.
+* `violation` if at least one finding passes its threshold. **Recall comes first:** a false alarm costs the reviewer a glance, a missed violation is never seen. Thresholds and gates are not tightened to remove a false positive when that risks dropping a true hit.
 * The `no_violation` verdict carries no hedge flag. A partial analysis (deadline hit) still reports everything found so far and sets `partial: true`.

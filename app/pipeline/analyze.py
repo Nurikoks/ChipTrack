@@ -42,11 +42,14 @@ Q = {
     "extra_person": "Is there a standing person right next to the seated worker, on the same side of the desk as the worker (not a visitor sitting opposite)?",
     "visitor_seated": "Is anyone sitting on the visitor side of the desk, across from the worker?",
     "at_safe": "Is a person standing at the small metal safe and using it right now?",
+    "handover": "Is one person handing banknotes (paper money) to another person across the desk right now?",
+    "money_in_hands": "Is the person at the desk holding banknotes (paper money) in their hands?",
 }
 # decision thresholds on P(yes) (set on the training probe set; recall first)
 TH = {"money": 0.3, "bag": 0.6, "docs": 0.55, "screen": 0.75, "safe_open": 0.4, "key": 0.5,
       "personal": 0.7, "drinking": 0.6, "door_open": 0.72, "carry_bag": 0.6, "doc_handover": 0.7,
-      "counting": 0.6, "extra_person": 0.6, "visitor_seated": 0.5, "at_safe": 0.5, "occupied": 0.5}
+      "counting": 0.6, "extra_person": 0.5, "visitor_seated": 0.5, "at_safe": 0.5, "occupied": 0.5,
+      "handover": 0.6, "money_in_hands": 0.5}
 
 
 @dataclass
@@ -99,7 +102,7 @@ class Analyzer:
         tl = self._timeline(clip, people, scene)
         findings: list[Finding] = []
         checks = [self._check_departures, self._check_changeover, self._check_entries,
-                  self._check_exits, self._check_periodic]
+                  self._check_exits, self._check_periodic, self._check_handover]
         for i, chk in enumerate(checks):
             if not budget.ok(8):
                 partial = True
@@ -288,38 +291,46 @@ class Analyzer:
     def _count_events(self, tl, up: bool, min_len=4):
         """Entries (up=True) / exits: (index, count before, count after).
 
-        Preferred: room tracks that start (entry) or end (exit) at the grounded door — robust to people
-        standing up or turning (which only re-start a track mid-room). Fallback without a door anchor:
-        sustained changes of the person count."""
+        Two sources, merged (recall first): room tracks that start (entry) or end (exit) at the grounded
+        door — robust to people standing up or turning — and sustained changes of the person count, which
+        catch entries the tracker loses (X-17, X-30, X-32, X-33). A count change within ~2 s of a door
+        event is the same event."""
         door = (self.scene or {}).get("door")
         n = tl["n"]
-        if door is not None and self.room_tracks:
-            ev = []
-            min_track = int(5 * config.SAMPLE_FPS)   # passers-by behind the glass are brief
-            for tr in self.room_tracks:
-                idx = sorted(tr)
-                if len(idx) < max(min_len, min_track):
-                    continue
-                i = idx[0] if up else idx[-1]
-                if (up and i < 2) or (not up and i > len(n) - 3):
-                    continue                  # present from the start / until the end
-                if not self._near(tr[i], door, 0.35, 0.25):
-                    continue
-                # continuation of another track at the same place (person stood up / turned): not an entry/exit
-                win = range(max(0, i - 4), i) if up else range(i + 1, min(len(n), i + 5))
-                if any(self._iou(tr[i], o[j]) > 0.2 for o in self.room_tracks if o is not tr for j in win if j in o):
-                    continue
-                ev.append((i, int(n[max(0, i - 2)]), int(n[min(len(n) - 1, i + 3)])))
-            return sorted(ev)
         ev = []
         for i in range(1, len(n)):
             ch = n[i] > n[i - 1] if up else n[i] < n[i - 1]
             if ch and all((n[j] >= n[i]) if up else (n[j] <= n[i]) for j in range(i, min(len(n), i + min_len))):
                 ev.append((i, int(n[i - 1]), int(n[i])))
-        return ev
+        if door is not None and self.room_tracks:
+            by_door = self._door_events(tl, up, min_len)
+            ev = by_door + [e for e in ev if all(abs(e[0] - d[0]) > min_len for d in by_door)]
+        return sorted(ev)
 
-    def _ask_crop(self, clip, i, box, key, margin=0.25):
-        p = self.vlm.p_yes(crop(clip.frames[i], box, margin), Q[key])
+    def _door_events(self, tl, up: bool, min_len):
+        """Room tracks that start (entry) or end (exit) at the grounded door."""
+        door = self.scene["door"]
+        n = tl["n"]
+        ev = []
+        min_track = int(5 * config.SAMPLE_FPS)   # passers-by behind the glass are brief
+        for tr in self.room_tracks:
+            idx = sorted(tr)
+            if len(idx) < max(min_len, min_track):
+                continue
+            i = idx[0] if up else idx[-1]
+            if (up and i < 2) or (not up and i > len(n) - 3):
+                continue                  # present from the start / until the end
+            if not self._near(tr[i], door, 0.35, 0.25):
+                continue
+            # continuation of another track at the same place (person stood up / turned): not an entry/exit
+            win = range(max(0, i - 4), i) if up else range(i + 1, min(len(n), i + 5))
+            if any(self._iou(tr[i], o[j]) > 0.2 for o in self.room_tracks if o is not tr for j in win if j in o):
+                continue
+            ev.append((i, int(n[max(0, i - 2)]), int(n[min(len(n) - 1, i + 3)])))
+        return sorted(ev)
+
+    def _ask_crop(self, clip, i, box, key, margin=0.25, min_side=448):
+        p = self.vlm.p_yes(crop(clip.frames[i], box, margin, min_side=min_side), Q[key])
         self.trace.append((round(clip.times[i], 1), key, round(p, 3)))
         return p
 
@@ -445,7 +456,7 @@ class Analyzer:
             j = self._idx(clip, i + 2)
             # T09: collector with a green bag; was any document handed over in the next ~10 s?
             collector = self._ask_full(clip, j, "carry_bag") >= TH["carry_bag"]
-            # T09 is experimental (1 positive / 1 negative clip, unstable): off unless FORTE_EXPERIMENTAL=1
+            # T09 rests on 1 positive / 1 negative clip; on by default (recall first), FORTE_EXPERIMENTAL=0 disables
             if collector and "desk" in scene and config.EXPERIMENTAL:
                 # when does the bag land on the desk? A document must be shown before that.
                 bag_at = None
@@ -470,18 +481,18 @@ class Analyzer:
                                            "На видео входит человек с зелёной инкассаторской сумкой; сумка оказывается на "
                                            "рабочем столе, передачи или проверки какого-либо документа до этого на кадрах "
                                            "не видно", [(j, None), (bag_at, scene["desk"])]))
-            # T06: an additional person standing next to the worker, persisting (not a visitor about to sit
-            # down, not the collector during a handover)
+            # T06: an additional person standing next to the worker (not a visitor about to sit down, not the
+            # collector during a handover). Recall first: one of the two looks (~1.5 s, ~3 s) is enough.
             if after >= 2 and not collector:
                 k, k2 = self._idx(clip, i + 3), self._idx(clip, i + 6)
-                pe = self._ask_full(clip, k, "extra_person")
-                if pe >= TH["extra_person"]:
-                    pe2 = self._ask_full(clip, k2, "extra_person")
+                pe, pe2 = self._ask_full(clip, k, "extra_person"), self._ask_full(clip, k2, "extra_person")
+                if max(pe, pe2) >= TH["extra_person"]:
                     seated = self._ask_full(clip, k2, "visitor_seated")
-                    if pe2 >= TH["extra_person"] and (seated < TH["visitor_seated"] or after >= 3):
-                        out.append(Finding("T06_UNAUTHORIZED_PERSON_CASH_ZONE", clip.times[k], min(pe, pe2),
-                                           "На видео рядом с работником, на его стороне рабочего стола, несколько секунд "
-                                           "находится ещё один стоящий человек", [(k, None), (k2, None)]))
+                    if seated < TH["visitor_seated"] or after >= 3:
+                        kb = k if pe >= pe2 else k2
+                        out.append(Finding("T06_UNAUTHORIZED_PERSON_CASH_ZONE", clip.times[kb], max(pe, pe2),
+                                           "На видео рядом с работником, на его стороне рабочего стола, находится ещё "
+                                           "один стоящий человек", [(k, None), (k2, None)]))
             # T07: room was empty, someone enters and walks on without turning back to the door.
             # Closing the door is visible as the person returning to the door zone right after entering
             # (relative motion, camera-angle independent); the glass-door state itself is ambiguous.
@@ -490,6 +501,15 @@ class Analyzer:
                 horizon = min(len(people), i + int(10 * config.SAMPLE_FPS))
                 near = [any(self._near(p["box"], door, 0.35, 0.25) for p in people[k]) for k in range(i, horizon)]
                 left = next((k for k, f in enumerate(near) if not f), None)
+                if left is None and horizon - i >= int(6 * config.SAMPLE_FPS):
+                    # the person never leaves the door zone: the grounded door box reaches the workplace
+                    # (X-33), so motion can't tell; recall first -> fall back to the door state ~3 s later
+                    k = self._idx(clip, i + int(3 * config.SAMPLE_FPS))
+                    pd_ = self._ask_crop(clip, k, door, "door_open", margin=0.05)
+                    if pd_ >= TH["door_open"]:
+                        out.append(Finding("T07_CASH_ROOM_DOOR_NOT_CLOSED", clip.times[k], 0.4 + 0.3 * pd_,
+                                           "На видео человек входит в пустое помещение; через несколько секунд дверь "
+                                           "выглядит открытой", [(i, None), (k, door)]))
                 if left is not None and horizon - i >= int(6 * config.SAMPLE_FPS):
                     returned = any(near[left + 1:])
                     if not returned:
@@ -536,8 +556,14 @@ class Analyzer:
                 p1 = self.trace[-1][2]
                 j = self._idx(clip, i + 2)    # confirm ~1 s later: a hand near the face is not drinking
                 if self._ask_full(clip, j, "drinking") >= TH["drinking"]:
-                    out.append(Finding("T11_FOOD_DRINK_AT_DESK", clip.times[i], min(p1, self.trace[-1][2]),
-                                       "На видео работник за рабочим столом пьёт из чашки", [(i, None), (j, None)]))
+                    p2 = self.trace[-1][2]
+                    # from behind, banknotes counted at face height read as drinking (X-1): banknotes in the
+                    # hands veto it (P = 0.81-0.99 there vs <= 0.17 while really drinking in X-46)
+                    held = max((self._ask_crop(clip, k, scene["desk"], "money_in_hands", margin=0.35, min_side=640)
+                                if "desk" in scene else self._ask_full(clip, k, "money_in_hands")) for k in (i, j))
+                    if held < TH["money_in_hands"]:
+                        out.append(Finding("T11_FOOD_DRINK_AT_DESK", clip.times[i], min(p1, p2),
+                                           "На видео работник за рабочим столом пьёт из чашки", [(i, None), (j, None)]))
             if self._ask_full(clip, i, "personal") >= TH["personal"]:
                 p1 = self.trace[-1][2]
                 if "desk" not in scene or self._ask_crop(clip, i, scene["desk"], "bag") < TH["bag"]:
@@ -570,6 +596,37 @@ class Analyzer:
                 out.append(Finding("T03_SAFE_LEFT_OPEN", clip.times[i1], min(p1, p2),
                                    f"На видео дверца сейфа остаётся открытой не менее {dur:.0f} с, при этом у сейфа "
                                    f"никого нет", [(i1, scene["safe"]), (last_open, scene["safe"])]))
+        return out
+
+    def _check_handover(self, clip, people, scene, tl, budget):
+        """Banknotes passed across the desk between the worker and a visitor (T12), scanned every ~1 s
+        while at least two people are in the room. Timecode = last frame of a run (the moment the money
+        changes hands). Recall first: on the training clips this also fires on ordinary client service."""
+        out = []
+        if "desk" not in scene:
+            return out
+        step = max(1, int(round(config.SAMPLE_FPS)))
+        hits = []
+        for i in range(0, len(clip.frames), step):
+            if not budget.ok(4):
+                break
+            if tl["n"][i] < 2 and len(people[i]) < 2:
+                continue
+            p = self._ask_crop(clip, i, scene["desk"], "handover", margin=0.35, min_side=640)
+            if p >= TH["handover"]:
+                hits.append((i, p))
+        runs = []
+        for i, p in hits:
+            if runs and i - runs[-1][-1][0] <= step:
+                runs[-1].append((i, p))
+            else:
+                runs.append([(i, p)])
+        for run in sorted(runs, key=lambda r: -max(p for _, p in r))[:3]:
+            peak = max(run, key=lambda x: x[1])[0]
+            last = run[-1][0]
+            out.append(Finding("T12_CASH_HANDOVER_AT_DESK", clip.times[last], max(p for _, p in run),
+                               "На видео у рабочего стола происходит передача банкнот между работником и "
+                               "посетителем", [(peak, scene["desk"]), (last, None)]))
         return out
 
     # ------------------------------------------------------------- aggregate
