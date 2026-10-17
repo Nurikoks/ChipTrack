@@ -1,6 +1,6 @@
-# Violation taxonomy, draft v0.1 (Phase 1, for review)
+# Violation taxonomy, v1.0 (final)
 
-Status: **draft, waiting for team confirmation.** Every type below comes from frames we actually looked at. Rule citations are deliberately missing; they are Phase 2 work and will be added only from verified Republic of Kazakhstan (RK) sources.
+Status: **final.** All 12 types below (T01–T12) are implemented in the service; the Russian names are the API `type` values. Every type comes from frames we actually looked at. Rule citations for each type are in [docs/normative_sources.md](docs/normative_sources.md) and [data/rules_registry.json](data/rules_registry.json); a short Russian list with grounding levels is in [docs/submission.md](docs/submission.md). Sections 2 and 5 below kept the Phase 1 wording ("proposed", "preview"); the decisions they led to are in [docs/architecture.md](docs/architecture.md).
 
 Evidence sheets: `docs/taxonomy_frames/<TYPE>.jpg`. Each row is one clip: 3 frames (before, at the label, after) plus an optional zoom tile. Orange captions are violation clips, green captions are normal clips used as hard negatives.
 Per-clip details: [data/labels_enriched.csv](data/labels_enriched.csv).

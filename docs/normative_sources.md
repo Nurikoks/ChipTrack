@@ -49,6 +49,7 @@ Example description (T05):
 | T09 Collector bag accepted without a document check | NBRK_231 para. 24 (+ para. 101) | Acceptance from collectors is based on an accompanying document; the cashier checks it, the bag's integrity and its seal | No document handover and no bag inspection visible | **strong** (the description must say "not visible", not "not checked") |
 | T10 Personal items at the desk | NBRK_231 para. 12 part 1 | Workers' personal items are kept outside the cash unit | Coat and handbag on the cash desk | **strong** |
 | T11 Food or drink at the desk | NBRK_231 para. 12 part 2 (interpretation) | Only medicines, medical devices and phones without a camera may be brought into the cash unit | Cashier drinks from a cup at the desk with cash on it | **weak**. Interpretation: food and drink are not on the allowed list; no explicit ban was found |
+| T12 Cash handed to a client at the desk | none | No clause found that forbids a handover the video can show; the registry keeps an empty rule list | Banknotes passed across the desk | **none**. The description says the basis is not verified and the reviewer must judge |
 | VISUAL_ANOMALY | none | | | **none** |
 
 Extension rules, kept ready for unseen test types:
@@ -61,5 +62,5 @@ Extension rules, kept ready for unseen test types:
 * **Strong (4):** T05, T08, T09, T10.
 * **Medium (5):** T01, T03, T04, T06, T07.
 * **Weak (2):** T02 (only an automatic-lock requirement exists), T11 (interpretation of para. 12).
-* **None:** the generic VISUAL_ANOMALY path.
+* **None:** T12 (cash handover at the desk) and the generic VISUAL_ANOMALY path.
 * No type had to be dropped. T02 and T11 stay, but their descriptions must use the softened «косвенно/толкование» wording.

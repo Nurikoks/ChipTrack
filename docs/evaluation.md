@@ -2,7 +2,7 @@
 
 **Method.** Full pipeline run on all 40 unique training clips (duplicates X-47 = X-4 and X-48 = X-5 merged; X-4 carries both labelled events). Video-level verdict versus label; timecode error versus the labelled second; type checked against the taxonomy. Per-clip outputs: `runtime/eval_v8/results.jsonl` (v8), `runtime/eval_v8b/results.jsonl` (v8b).
 
-**Important caveat:** all rules and thresholds were set by looking at these same clips, so every number below is **in-sample and optimistic**. The labelled set has 21 positive clips and 22 events over 12 types, several types with one or two events. It is too small for an honest held-out split per type. A pseudo-new-angle set (40 warped clips: perspective, rotation, mirror, crop, landscape) was built (`tools/make_pseudo_angles.py`), but its evaluation has not been run, so there is no held-out number yet.
+**Important caveat:** all rules and thresholds were set by looking at these same clips, so every number below is **in-sample and optimistic**. The labelled set has 21 positive clips and 22 events over 12 types, several types with one or two events. It is too small for an honest held-out split per type. A pseudo-new-angle set (40 warped clips: perspective, rotation, mirror, crop, landscape) was built (`tools/make_pseudo_angles.py`) and evaluated: see [Pseudo-new-angle check](#pseudo-new-angle-check-v8-warped-clips). It shows how robust the rules are to geometry changes, but it is not a held-out set either: the thresholds were still tuned on the source clips.
 
 ## Progress across versions (40 clips)
 
@@ -103,6 +103,26 @@ Counterfactuals below are in-sample, computed from the v8 predictions (no re-run
 * T07 true positives score 0.705 (X-32) and 0.688 (X-33); the false alarm X-31 scores 0.684.
 * X-18 (labelled T06) is detected at 0.551 against a threshold of 0.5. The earlier threshold of 0.6 would have missed it.
 * X-1 and X-2 are partly caught by T06 hits at 3.5 s and 5.0 s. Those hits look like a client approaching the desk, not an extra person in the cash zone, so the hit is right for the wrong reason.
+
+## Pseudo-new-angle check (v8, warped clips)
+
+Each of the 40 clips was re-rendered once with one geometric change (`runtime/aug_v8/index.csv`) and the full pipeline was run on the result (`runtime/eval_v8_aug/`). Baseline numbers in brackets are v8c on the same clips, unwarped.
+
+| Transform | Clips | Violation clips | Recall | False alarms | Labelled type found | Timecode median |
+|---|---|---|---|---|---|---|
+| crop / zoom | 6 | 3 | 3/3 (3/3) | 3/3 (2/3) | 3/3 (3/3) | 1.5 s (4.0 s) |
+| landscape | 6 | 3 | 3/3 (3/3) | 0/3 (0/3) | 3/3 (3/3) | 5.0 s (2.0 s) |
+| mirror | 7 | 4 | 4/4 (3/4) | 1/3 (2/3) | 3/4 (3/4) | 3.0 s (1.9 s) |
+| perspective | 14 | 8 | 5/8 (6/8) | 2/6 (2/6) | 3/8 (5/8) | 2.1 s (0.9 s) |
+| rotation ±10° | 7 | 3 | 2/3 (3/3) | 2/4 (3/4) | 2/3 (3/3) | 4.0 s (0.9 s) |
+| **all** | **40** | **21** | **17/21 = 0.81 (0.86)** | **8/19 (9/19)** | **14/21 (17/21)** | **2.1 s (1.7 s)** |
+
+Precision 0.68, 0 partial results, 0 errors, 23.0 s mean per clip (not comparable: a second idle service shared the GPU).
+
+* Recall drops by one clip overall. Perspective and rotation cost the most: X-11 (T02, perspective) and X-24 (T01, rotation) are lost; X-34 keeps its verdict but loses its T08 event. Mirroring gains X-13.
+* Type agreement drops more than recall (17 → 14): under warps the clip is still flagged, but more often through T06/T12 than through its labelled type.
+* Timecodes get noisier (median 1.7 s → 2.1 s): occupancy and track timing shift when the room geometry is distorted.
+* No new failure mode appeared (no partial results, no anchor-missing warnings), which supports the per-video grounding design; but a real new camera position can differ more than these warps.
 
 ## API test (jury-style, real models, `tools/api_test.py`)
 
