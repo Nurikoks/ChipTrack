@@ -53,7 +53,8 @@ class JobManager:
         self._jobs: dict[str, Job] = {}
         self._q: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
-        threading.Thread(target=self._worker, daemon=True, name="gpu-worker").start()
+        self._thread = threading.Thread(target=self._worker, daemon=True, name="gpu-worker")
+        self._thread.start()
         threading.Thread(target=self._janitor, daemon=True, name="janitor").start()
 
     def submit(self, path: Path, filename: str) -> Job:
@@ -69,34 +70,50 @@ class JobManager:
             return self._jobs.get(job_id)
 
     def queue_position(self, job_id: str) -> int:
-        return list(self._q.queue).index(job_id) + 1 if job_id in self._q.queue else 0
+        with self._q.mutex:              # the worker mutates the deque concurrently
+            pending = list(self._q.queue)
+        return pending.index(job_id) + 1 if job_id in pending else 0
+
+    def worker_alive(self) -> bool:
+        return self._thread.is_alive()
 
     def _worker(self):
         while True:
             jid = self._q.get()
-            job = self.get(jid)
-            if job is None:
-                continue
-            t0 = time.time()
             try:
-                if time.time() > job.deadline - 5:
-                    raise TimeoutError("job waited in queue past its deadline")
-                job.stage = "analyzing"
-                job.result = self._analyze(job.path, job)
-                job.status = "done"
-            except Exception as e:  # never leave a job hanging
-                log.error("job %s failed: %s\n%s", jid, e, traceback.format_exc())
-                job.error = f"{type(e).__name__}: {e}"
-                job.status = "failed"
-            finally:
-                job.finished = time.time()
-                job.progress = 1.0
-                try:
-                    job.path.unlink(missing_ok=True)   # never keep uploaded videos
-                except OSError:
-                    log.warning("could not delete %s", job.path)
-                log.info("job %s %s in %.1fs (total since upload %.1fs)", jid, job.status,
-                         job.finished - t0, job.finished - job.created)
+                self._run(jid)
+            except BaseException:  # the worker must never die: every later job would stay 'processing'
+                log.critical("worker error on job %s\n%s", jid, traceback.format_exc())
+                job = self.get(jid)
+                if job is not None and job.status == "processing":
+                    job.status, job.error = "failed", "internal worker error"
+
+    def _run(self, jid: str):
+        job = self.get(jid)
+        if job is None:
+            return
+        t0 = time.time()
+        try:
+            if time.time() > job.deadline - 5:
+                raise TimeoutError("job waited in queue past its deadline")
+            job.stage = "analyzing"
+            job.result = self._analyze(job.path, job)
+            if job.result is None:
+                raise RuntimeError("pipeline returned no result")
+            job.status = "done"
+        except Exception as e:  # never leave a job hanging
+            log.error("job %s failed: %s\n%s", jid, e, traceback.format_exc())
+            job.error = f"{type(e).__name__}: {e}"
+            job.status = "failed"
+        finally:
+            job.finished = time.time()
+            job.progress = 1.0
+            try:
+                job.path.unlink(missing_ok=True)   # never keep uploaded videos
+            except OSError:
+                log.warning("could not delete %s", job.path)
+            log.info("job %s %s in %.1fs (total since upload %.1fs)", jid, job.status,
+                     job.finished - t0, job.finished - job.created)
 
     def _janitor(self):
         while True:

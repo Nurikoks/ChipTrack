@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import config
 from .jobs import JobManager
+from .pipeline import rules
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("forte.api")
@@ -22,11 +23,15 @@ config.WORK_DIR.mkdir(parents=True, exist_ok=True)
 for stale in config.WORK_DIR.glob("upload_*"):  # leftovers from a crash: never keep videos
     stale.unlink(missing_ok=True)
 
+rules.validate()                      # a broken rules registry stops startup instead of the first violating job
+
 if config.DUMMY:
     from .pipeline.dummy import analyze
 else:
     from .pipeline.analyze import Analyzer
-    analyze = Analyzer().analyze      # loads all models once, before serving
+    _analyzer = Analyzer()            # loads all models once, before serving
+    _analyzer.warmup()
+    analyze = _analyzer.analyze
 
 jobs = JobManager(analyze)
 app = FastAPI(title="ForteBank cash-desk video review", version="0.1")
@@ -75,8 +80,9 @@ async def _store_upload(file: UploadFile) -> Path:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "uptime_sec": round(time.time() - STARTED), "dummy": config.DUMMY,
-            "queue": jobs._q.qsize()}
+    alive = jobs.worker_alive()
+    return {"status": "ok" if alive else "degraded", "worker_alive": alive,
+            "uptime_sec": round(time.time() - STARTED), "dummy": config.DUMMY, "queue": jobs._q.qsize()}
 
 
 @app.post("/api/v1/analyze", dependencies=[Depends(require_key)])

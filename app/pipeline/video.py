@@ -1,6 +1,6 @@
 """Video decoding / sampling / evidence-frame encoding."""
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
@@ -18,6 +18,7 @@ class Clip:
     duration: float
     width: int
     height: int
+    warnings: list[str] = field(default_factory=list)   # decode problems (see sample)
 
 
 def probe(path) -> tuple[float, int, float, int, int]:
@@ -40,12 +41,13 @@ def sample(path, target_fps: float = 2.0, max_frames: int = 1200, max_side: int 
     step = max(1, round(fps / target_fps))
     scale = min(1.0, max_side / max(w, h))
     cap = cv2.VideoCapture(str(path))
-    times, frames, i = [], [], 0
+    times, frames, i, bad = [], [], 0, 0
     while len(frames) < max_frames:
         if not cap.grab():
             break
         if i % step == 0:
             ok, f = cap.retrieve()
+            bad += not ok
             if ok:
                 if scale < 1.0:
                     f = cv2.resize(f, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
@@ -56,8 +58,14 @@ def sample(path, target_fps: float = 2.0, max_frames: int = 1200, max_side: int 
     cap.release()
     if not frames:
         raise VideoError("в файле нет декодируемых видеокадров")
+    # A cut or damaged file decodes only its first part; without this the result would look complete.
+    warnings = []
+    if len(frames) >= max_frames:
+        warnings.append("frames_capped")
+    elif (n > 0 and i < 0.9 * n) or bad > 0.1 * (len(frames) + bad):
+        warnings.append("decode_truncated")
     dur = max(dur, times[-1])
-    return Clip(times, frames, fps, dur, frames[0].shape[1], frames[0].shape[0])
+    return Clip(times, frames, fps, dur, frames[0].shape[1], frames[0].shape[0], warnings)
 
 
 def to_b64_jpeg(frame: np.ndarray, quality: int = 85, box=None, label: str | None = None) -> str:
@@ -68,6 +76,8 @@ def to_b64_jpeg(frame: np.ndarray, quality: int = 85, box=None, label: str | Non
         if label:
             cv2.putText(img, label, (x1, max(14, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise ValueError("JPEG encoding failed")
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 

@@ -45,6 +45,8 @@ else:
             c["events"].append({"t": float(r.timestamp_sec), "type": r.type_candidate})
 if only:
     clips = {k: v for k, v in clips.items() if k in only}
+if not clips:
+    sys.exit(f"no clips to evaluate (unknown ids: {sorted(only)})")
 
 an = Analyzer()
 rows = []
@@ -61,7 +63,8 @@ with (out_dir / "results.jsonl").open("w", encoding="utf-8") as fo:
         preds = [{"t": v["timecode_sec"], "type": v["type_id"], "conf": v["confidence"],
                   "desc": v["description"][:160]} for v in res["violations"]]
         row = {**c, "pred_verdict": res["verdict"], "preds": preds, "sec": round(dt, 1),
-               "partial": res.get("partial"), "error": err, "debug": res.get("debug")}
+               "partial": res.get("partial"), "warnings": res.get("warnings"), "error": err,
+               "debug": res.get("debug")}
         rows.append(row)
         fo.write(json.dumps(row, ensure_ascii=False) + "\n")
         fo.flush()
@@ -69,12 +72,17 @@ with (out_dir / "results.jsonl").open("w", encoding="utf-8") as fo:
               f"gt_ev={[(e['t'], e['type'][:12]) for e in c['events']]}  pred={[(p['t'], p['type'][:12], p['conf']) for p in preds]}")
 
 # ---- metrics ----
-tp = sum(r["label"] == "violation" and r["pred_verdict"] == "violation" for r in rows)
-fn = sum(r["label"] == "violation" and r["pred_verdict"] != "violation" for r in rows)
-fp = sum(r["label"] == "no_violation" and r["pred_verdict"] == "violation" for r in rows)
-tn = sum(r["label"] == "no_violation" and r["pred_verdict"] != "violation" for r in rows)
+# a crashed clip is neither a hit nor a correct "no violation": count it separately
+errors = [r for r in rows if r["error"]]
+ok_rows = [r for r in rows if not r["error"]]
+tp = sum(r["label"] == "violation" and r["pred_verdict"] == "violation" for r in ok_rows)
+fn = sum(r["label"] == "violation" and r["pred_verdict"] != "violation" for r in ok_rows)
+fp = sum(r["label"] == "no_violation" and r["pred_verdict"] == "violation" for r in ok_rows)
+tn = sum(r["label"] == "no_violation" and r["pred_verdict"] != "violation" for r in ok_rows)
 print(f"\nVideo-level: TP={tp} FN={fn} FP={fp} TN={tn} | recall={tp / max(1, tp + fn):.2f} "
-      f"precision={tp / max(1, tp + fp):.2f}")
+      f"precision={tp / max(1, tp + fp):.2f} | errors={len(errors)} partial={sum(bool(r['partial']) for r in rows)}")
+for r in errors:
+    print(f"  ERROR {r['video_id']}: {r['error']}")
 errs, type_hits, n_ev = [], 0, 0
 for r in rows:
     for e in r["events"]:

@@ -11,13 +11,19 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
+import torch
 
 from .. import config
 from . import video
 from .models import VLM, Detector, crop
-from .rules import build_violation
+from .rules import build_violation, fallback_violation
 
 log = logging.getLogger("forte.analyze")
+
+# Warnings that make a "no violation" untrustworthy: they set `partial`. Others (e.g. no safe or laptop
+# in view, which some layouts simply lack) are reported in `warnings` only.
+PARTIAL_WARNINGS = ("check_failed", "check_skipped", "budget_truncated", "decode_truncated", "frames_capped",
+                    "anchor_missing:desk", "no_persons", "nan_logits")
 
 # ---- yes/no questions (English: best accuracy for the VLM; never shown to users) ----
 Q = {
@@ -64,12 +70,23 @@ class Finding:
 class Budget:
     def __init__(self, deadline: float):
         self.deadline = deadline
+        self.stage = ""                  # check currently running
+        self.truncated: list[str] = []   # checks whose scans were cut short by the deadline
 
     def left(self) -> float:
         return self.deadline - time.time()
 
     def ok(self, need: float = 2.0) -> bool:
-        return self.left() > need
+        if self.left() > need:
+            return True
+        if self.stage and self.stage not in self.truncated:
+            self.truncated.append(self.stage)
+        return False
+
+
+def _sticky_cuda_error(e: Exception) -> bool:
+    """A device-side CUDA error poisons every later GPU call: the job must fail, not skip checks."""
+    return isinstance(e, RuntimeError) and not isinstance(e, torch.cuda.OutOfMemoryError) and "CUDA error" in str(e)
 
 
 class Analyzer:
@@ -78,20 +95,36 @@ class Analyzer:
         self.vlm = VLM(config.VLM_ID, four_bit=config.VLM_4BIT)
         self.trace = []
         self.scene, self.room_tracks = {}, []
+        self.warnings: list[str] = []
+
+    def warmup(self):
+        """One tiny pass through every model, so the first job does not pay the CUDA/bnb kernel warm-up."""
+        img = np.zeros((480, 640, 3), np.uint8)
+        self.det([img])
+        self.vlm.p_yes(VLM.to_pil(img), Q["occupied"])
+        self.vlm.ground(VLM.to_pil(img), "desk")
 
     # ------------------------------------------------------------------ main
     def analyze(self, path, job) -> dict:
+        try:
+            return self._analyze(path, job)
+        finally:
+            torch.cuda.empty_cache()
+
+    def _analyze(self, path, job) -> dict:
         t0 = time.time()
-        budget = Budget(job.deadline - 20)  # keep 20 s for encoding the report
-        self.vlm.calls, self.trace = 0, []
-        partial = False
+        budget = Budget(job.deadline - 8)  # keep 8 s for the report (JPEG + JSON take < 1 s)
+        self.vlm.calls, self.vlm.nan, self.trace, self.warnings = 0, 0, [], []
 
         job.stage, job.progress = "decoding", 0.05
         clip = video.sample(path, config.SAMPLE_FPS)
+        self.warnings += clip.warnings
 
         job.stage, job.progress = "perception", 0.15
         dets = self.det(clip.frames)
         raw = self._people(dets, clip)
+        if not any(raw):
+            self.warnings.append("no_persons")
 
         job.stage, job.progress = "scene", 0.3
         scene = self._scene(clip, raw)
@@ -101,30 +134,38 @@ class Analyzer:
         job.stage, job.progress = "checks", 0.4
         tl = self._timeline(clip, people, scene)
         findings: list[Finding] = []
-        checks = [self._check_departures, self._check_changeover, self._check_entries,
-                  self._check_exits, self._check_periodic, self._check_handover]
+        # cheap event checks first, so they survive when the deadline cuts the expensive scans
+        checks = [self._check_entries, self._check_exits, self._check_changeover,
+                  self._check_departures, self._check_periodic, self._check_handover]
         for i, chk in enumerate(checks):
-            if not budget.ok(8):
-                partial = True
-                log.warning("deadline: skipping %s and later checks", chk.__name__)
+            name = chk.__name__.removeprefix("_check_")
+            if budget.left() <= 8:
+                log.warning("deadline: skipping %s and later checks", name)
+                self.warnings += [f"check_skipped:{c.__name__.removeprefix('_check_')}" for c in checks[i:]]
                 break
+            budget.stage = name
             try:
-                findings += chk(clip, people, scene, tl, budget)
-            except Exception:
-                log.exception("check %s failed; continuing", chk.__name__)
+                chk(clip, people, scene, tl, budget, findings)   # appends as it goes: a crash keeps earlier hits
+            except Exception as e:
+                if _sticky_cuda_error(e):
+                    raise
+                if isinstance(e, torch.cuda.OutOfMemoryError):
+                    torch.cuda.empty_cache()
+                log.exception("check %s failed; continuing", name)
+                self.warnings.append(f"check_failed:{name}")
             job.progress = 0.4 + 0.5 * (i + 1) / len(checks)
+        self.warnings += [f"budget_truncated:{s}" for s in budget.truncated]
+        if self.vlm.nan:
+            self.warnings.append(f"nan_logits:{self.vlm.nan}")
 
         job.stage = "report"
         findings = self._merge(findings)
-        violations = []
-        for f in findings:
-            frames = [{"timestamp_sec": round(clip.times[idx], 1),
-                       "image_base64": video.to_b64_jpeg(clip.frames[idx], box=box)} for idx, box in f.frames[:3]]
-            violations.append(build_violation(f.type_id, f.t, f.observed, frames, f.conf))
-        log.info("analysis done in %.1fs, vlm calls=%d, findings=%d, partial=%s",
-                 time.time() - t0, self.vlm.calls, len(violations), partial)
+        violations = [self._report(clip, f) for f in findings]
+        partial = any(w.startswith(PARTIAL_WARNINGS) for w in self.warnings)
+        log.info("analysis done in %.1fs, vlm calls=%d, findings=%d, partial=%s, warnings=%s",
+                 time.time() - t0, self.vlm.calls, len(violations), partial, self.warnings)
         out = {"verdict": "violation" if violations else "no_violation", "violations": violations,
-               "partial": partial, "video_duration_sec": round(clip.duration, 1),
+               "partial": partial, "warnings": self.warnings, "video_duration_sec": round(clip.duration, 1),
                "processing_time_sec": round(time.time() - t0, 1)}
         if config.DEBUG:
             out["debug"] = {"scene": {k: [int(v) for v in b] for k, b in scene.items()},
@@ -215,7 +256,14 @@ class Analyzer:
     def _scene(self, clip, people):
         """Ground the static anchors once per video on the least-occluded frames."""
         counts = [len(p) for p in people]
-        cand = sorted(range(len(clip.frames)), key=lambda i: (counts[i], i))[:3]
+        # least-occupied frames, spread over the clip: a retry on the next frame (0.5 s later) sees the same view
+        gap = max(1, len(clip.frames) // 6)
+        cand = []
+        for i in sorted(range(len(clip.frames)), key=lambda i: (counts[i], i)):
+            if all(abs(i - c) >= gap for c in cand):
+                cand.append(i)
+            if len(cand) == 3:
+                break
         scene = {}
         for name, query in [("desk", "desk"), ("safe", "small grey metal safe"), ("laptop", "laptop"),
                             ("door", "glass door")]:
@@ -224,6 +272,8 @@ class Analyzer:
                 if box and self._plausible(name, box, clip):
                     scene[name] = box
                     break
+            else:
+                self.warnings.append(f"anchor_missing:{name}")
         log.info("scene anchors: %s", {k: [int(v) for v in b] for k, b in scene.items()})
         return scene
 
@@ -359,9 +409,8 @@ class Analyzer:
         return int(min(len(clip.frames) - 1, max(0, i)))
 
     # ---------------------------------------------------------------- checks
-    def _check_departures(self, clip, people, scene, tl, budget):
+    def _check_departures(self, clip, people, scene, tl, budget, out):
         """Workplace (desk ∪ safe) left unattended >= 2 s -> what was left behind?"""
-        out = []
         gaps = [g for g in self._segments(tl["attended"], False, min_len=4) if g[0] > 0 and tl["attended"][g[0] - 1]]
         # 2-D geometry cannot separate "at the desk" from "at the door behind the desk" in some layouts,
         # so a VLM occupancy scan (every ~2 s) proposes departures too.
@@ -421,9 +470,8 @@ class Analyzer:
                                        [(leave_idx, None), (iv, scene["safe"])]))
         return out
 
-    def _check_changeover(self, clip, people, scene, tl, budget):
+    def _check_changeover(self, clip, people, scene, tl, budget, out):
         """Someone left, then a new person enters while cash lies openly on the desk."""
-        out = []
         if "desk" not in scene:
             return out
         exits = [i for i, _, _ in self._count_events(tl, up=False)]
@@ -447,9 +495,8 @@ class Analyzer:
                                    [(i, None), (j, scene["desk"])]))
         return out
 
-    def _check_entries(self, clip, people, scene, tl, budget):
+    def _check_entries(self, clip, people, scene, tl, budget, out):
         """Entries: collector without document (T09), extra person beside the worker (T06), door left open (T07)."""
-        out = []
         for i, before, after in self._count_events(tl, up=True):
             if not budget.ok(6):
                 break
@@ -524,9 +571,8 @@ class Analyzer:
                                                 (self._idx(clip, i + left + 4), door)]))
         return out
 
-    def _check_exits(self, clip, people, scene, tl, budget):
+    def _check_exits(self, clip, people, scene, tl, budget, out):
         """A visitor leaves while the worker keeps handling cash (counting not in the client's presence)."""
-        out = []
         for i, before, after in self._count_events(tl, up=False, min_len=6):
             if not budget.ok(4) or after != 1:
                 continue
@@ -544,9 +590,8 @@ class Analyzer:
                                    [(self._idx(clip, i - 1), None), (k, None)]))
         return out
 
-    def _check_periodic(self, clip, people, scene, tl, budget):
+    def _check_periodic(self, clip, people, scene, tl, budget, out):
         """Sparse scan: personal items, drinking, safe open while nobody is at the safe."""
-        out = []
         step = max(1, int(round(4.0 * config.SAMPLE_FPS)))   # every ~4 s
         runs = []
         for i in range(0, len(clip.frames), step):
@@ -598,11 +643,10 @@ class Analyzer:
                                    f"никого нет", [(i1, scene["safe"]), (last_open, scene["safe"])]))
         return out
 
-    def _check_handover(self, clip, people, scene, tl, budget):
+    def _check_handover(self, clip, people, scene, tl, budget, out):
         """Banknotes passed across the desk between the worker and a visitor (T12), scanned every ~1 s
         while at least two people are in the room. Timecode = last frame of a run (the moment the money
         changes hands). Recall first: on the training clips this also fires on ordinary client service."""
-        out = []
         if "desk" not in scene:
             return out
         step = max(1, int(round(config.SAMPLE_FPS)))
@@ -630,6 +674,29 @@ class Analyzer:
         return out
 
     # ------------------------------------------------------------- aggregate
+    def _report(self, clip, f: Finding) -> dict:
+        """A finding is never dropped by a reporting error: a bad frame or rule text degrades it instead."""
+        frames = []
+        for idx, box in f.frames[:3]:
+            try:
+                frames.append({"timestamp_sec": round(clip.times[idx], 1),
+                               "image_base64": video.to_b64_jpeg(clip.frames[idx], box=box)})
+            except Exception:
+                log.exception("evidence frame %s for %s failed", idx, f.type_id)
+        if not frames:   # the API requires at least one frame: fall back to the frame at the timecode
+            try:
+                frames.append({"timestamp_sec": round(f.t, 1),
+                               "image_base64": video.to_b64_jpeg(clip.frames[video.nearest_index(clip.times, f.t)])})
+            except Exception:
+                log.exception("fallback frame for %s failed", f.type_id)
+        try:
+            v = build_violation(f.type_id, f.t, f.observed, frames, f.conf)
+        except Exception:
+            log.exception("rule text for %s failed", f.type_id)
+            v = fallback_violation(f.type_id, f.t, f.observed, frames, f.conf)
+            self.warnings.append(f"report_degraded:{f.type_id}")
+        return v
+
     @staticmethod
     def _merge(findings, window=12.0):
         """One finding per type per ~12 s window (keep the most confident, earliest timecode)."""

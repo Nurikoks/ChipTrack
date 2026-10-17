@@ -3,6 +3,7 @@
 Both run fully offline once weights are in HF_HOME (set HF_HUB_OFFLINE=1 in production).
 """
 import logging
+import math
 import re
 import time
 
@@ -61,6 +62,7 @@ class VLM:
         self.yes = [tok.encode(w, add_special_tokens=False)[0] for w in ("yes", "Yes")]
         self.no = [tok.encode(w, add_special_tokens=False)[0] for w in ("no", "No")]
         self.calls = 0
+        self.nan = 0     # non-finite P(yes) answers in the current job
         log.info("VLM %s loaded in %.1fs (vram %.2f GB)", model_id, time.time() - t,
                  torch.cuda.memory_allocated() / 2**30)
 
@@ -76,8 +78,17 @@ class VLM:
     @torch.inference_mode()
     def p_yes(self, img: Image.Image, question: str) -> float:
         self.calls += 1
-        lg = self.model(**self._inputs(img, question + " Answer with one word: yes or no.")).logits[0, -1].float()
-        return torch.sigmoid(torch.logsumexp(lg[self.yes], 0) - torch.logsumexp(lg[self.no], 0)).item()
+        # only the last position is read: skip the 151k-vocabulary head on the other ~450 positions
+        lg = self.model(**self._inputs(img, question + " Answer with one word: yes or no."),
+                        logits_to_keep=1).logits[0, -1].float()
+        p = torch.sigmoid(torch.logsumexp(lg[self.yes], 0) - torch.logsumexp(lg[self.no], 0)).item()
+        if not math.isfinite(p):
+            # fp16 overflow: a NaN would silently read as "no" on every threshold. Recall first -> "yes",
+            # and the analyzer marks the result partial.
+            self.nan += 1
+            log.error("VLM returned a non-finite P(yes) for %r", question[:60])
+            return 1.0
+        return p
 
     @torch.inference_mode()
     def ground(self, img: Image.Image, name: str) -> tuple[float, float, float, float] | None:
@@ -85,12 +96,16 @@ class VLM:
         self.calls += 1
         inp = self._inputs(img, f'Output the bounding box of the {name} as JSON {{"bbox_2d":[x1,y1,x2,y2]}}. '
                                 f'If there is no {name}, output {{"bbox_2d":[]}}.')
-        out = self.model.generate(**inp, max_new_tokens=40, do_sample=False)
+        # digits are single tokens: 40 could cut a box inside a code fence or with an extra "label" field
+        out = self.model.generate(**inp, max_new_tokens=96, do_sample=False)
         txt = self.proc.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
-        m = re.search(r"\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]", txt)
+        num = r"\s*(-?\d+(?:\.\d+)?)\s*"
+        m = re.search(rf"\[{num},{num},{num},{num}\]", txt)
         if not m:
+            log.info("no box for %r in %r", name, txt[:120])
             return None
-        x1, y1, x2, y2 = (int(v) / 1000 for v in m.groups())  # Qwen3-VL uses relative 0..1000 coords
+        # Qwen3-VL uses relative 0..1000 coords; clamp, the model can overshoot the image border
+        x1, y1, x2, y2 = (min(1.0, max(0.0, float(v) / 1000)) for v in m.groups())
         if x2 <= x1 or y2 <= y1:
             return None
         return x1 * img.width, y1 * img.height, x2 * img.width, y2 * img.height
@@ -103,6 +118,8 @@ def crop(frame: np.ndarray, box, margin: float = 0.25, min_side: int = 448) -> I
     x1, y1 = int(max(0, x1 - margin * bw)), int(max(0, y1 - margin * bh))
     x2, y2 = int(min(w, x2 + margin * bw)), int(min(h, y2 + margin * bh))
     c = frame[y1:y2, x1:x2]
+    if c.shape[0] < 2 or c.shape[1] < 2:   # degenerate / out-of-frame box: ask about the whole frame instead
+        c = frame
     s = max(1.0, min_side / max(c.shape[:2]))
     if s > 1.0:
         c = cv2.resize(c, (int(c.shape[1] * s), int(c.shape[0] * s)), interpolation=cv2.INTER_CUBIC)

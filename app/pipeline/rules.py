@@ -80,6 +80,28 @@ def rule_text(type_id: str) -> str:
     return txt
 
 
+def validate() -> None:
+    """Build every type's rule text once at startup: a broken registry must stop the service, not fail
+    only the first job that finds a violation."""
+    for type_id in TYPE_NAMES:
+        build_violation(type_id, 0.0, "проверка", [], 0.0)
+
+
+def fallback_violation(type_id: str, timecode: float, observed: str, frames: list[dict],
+                       confidence: float) -> dict:
+    """Same schema as build_violation, without the rule text (used when building it failed)."""
+    return {
+        "type": TYPE_NAMES.get(type_id, TYPE_NAMES["VISUAL_ANOMALY"]),
+        "timecode_sec": round(float(timecode), 1),
+        "description": f"{observed.rstrip('.')}. Нормативное основание не удалось сформировать; "
+                       f"требуется оценка проверяющим.",
+        "evidence_frames": frames[:3],
+        "type_id": type_id,
+        "confidence": round(float(confidence), 3),
+        "rule": {"grounding": "none", "references": []},
+    }
+
+
 def build_violation(type_id: str, timecode: float, observed: str, frames: list[dict],
                     confidence: float) -> dict:
     """observed: factual Russian sentence(s) about what is visible (no intent, no identity)."""
