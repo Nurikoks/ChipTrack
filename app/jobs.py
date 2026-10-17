@@ -23,6 +23,9 @@ from .pipeline.video import VideoError
 log = logging.getLogger("forte.jobs")
 
 WATCHDOG_GRACE_SEC = 20.0      # a job still running this long after its deadline is failed
+# Decode + detection + scene grounding take ~15-25 s before any check can run: a job with less time left
+# would only return an empty "partial" result (or overrun into the watchdog), so it fails honestly instead.
+MIN_START_SEC = 30.0
 PRIORITY = {"api": 0, "ui": 1}
 
 
@@ -128,7 +131,7 @@ class JobManager:
         self._running = job
         t0 = time.time()
         try:
-            if time.time() > job.deadline - 5:
+            if time.time() > job.deadline - MIN_START_SEC:
                 raise TimeoutError("job waited in queue past its deadline")
             job.stage = "analyzing"
             result = self._analyze(job.path, job)

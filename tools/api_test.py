@@ -99,8 +99,8 @@ print(f"all done in {time.time() - t0:.1f}s")
 print("--- reviewer UI (no key)")
 if api_ids:
     print("jury job via /ui/jobs ->", curl(f"{base}/ui/jobs/{api_ids[0]}")[0], "(expected 404)")
-codes = []
-for _ in range(4):        # the 4th unauthenticated upload must be refused while 3 are pending
-    code, body = curl("-X", "POST", f"{base}/ui/analyze", "-F", f"file=@{videos[0]}")
-    codes.append(code)
-print("4 UI uploads ->", codes, "(expected 200, 200, 200, 429)")
+# parallel, so the limit must also count uploads still in transfer
+with ThreadPoolExecutor(5) as ex:
+    codes = sorted(c for c, _ in ex.map(lambda _: curl("-X", "POST", f"{base}/ui/analyze", "-F", f"file=@{videos[0]}"),
+                                        range(5)))
+print("5 parallel UI uploads ->", codes, "(expected 200, 200, 200, 429, 429)")

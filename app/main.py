@@ -49,6 +49,7 @@ STATIC = Path(__file__).parent / "static"
 STARTED = time.time()
 UPLOAD_PATHS = ("/api/v1/analyze", "/ui/analyze")
 UI_MAX_PENDING = 3                    # unauthenticated uploads waiting or running at once
+_ui_uploading = 0                     # /ui/analyze requests whose upload is still being received
 
 # container signatures: the extension alone lets any file reach FFmpeg's demuxers
 _ISO_BMFF = (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip")   # .mov/.mp4/.m4v
@@ -76,6 +77,7 @@ async def _reject(request: Request, status: int, detail: str) -> JSONResponse:
 async def guard(request: Request, call_next):
     """API key for /api/*, upload size and UI queue limits — all checked before the body is received.
     Also stamps the request start: the job deadline counts from here, upload time included."""
+    global _ui_uploading
     request.state.t0 = time.time()
     path = request.url.path
     if path.startswith("/api/"):
@@ -89,8 +91,15 @@ async def guard(request: Request, call_next):
             length = 0
         if length > config.MAX_UPLOAD_MB * 2**20 + 2**20:   # + multipart overhead
             return await _reject(request, 413, f"file larger than {config.MAX_UPLOAD_MB} MB")
-        if path == "/ui/analyze" and jobs.pending("ui") >= UI_MAX_PENDING:
-            return await _reject(request, 429, "Очередь проверки занята, повторите через минуту.")
+        if path == "/ui/analyze":
+            # uploads still in transfer count too: a job exists only once its upload has finished
+            if jobs.pending("ui") + _ui_uploading >= UI_MAX_PENDING:
+                return await _reject(request, 429, "Очередь проверки занята, повторите через минуту.")
+            _ui_uploading += 1          # event-loop only: no lock needed
+            try:
+                return await call_next(request)   # the handler has submitted the job when this returns
+            finally:
+                _ui_uploading -= 1
     return await call_next(request)
 
 

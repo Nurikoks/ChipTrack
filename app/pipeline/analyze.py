@@ -7,6 +7,7 @@ Design rules (see docs/architecture.md):
 * Deadline-aware: checks run in priority order; when time runs out the best partial result is returned.
 """
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -117,7 +118,8 @@ class Analyzer:
         self.vlm.calls, self.vlm.nan, self.trace, self.warnings = 0, 0, [], []
 
         job.stage, job.progress = "decoding", 0.05
-        clip = video.sample(path, config.SAMPLE_FPS, deadline=budget.deadline - 60)  # leave time for checks
+        # a full decode takes ~2 s even for a 145 s clip: the guard is only for pathological files
+        clip = video.sample(path, config.SAMPLE_FPS, deadline=budget.deadline)
         self.warnings += clip.warnings
 
         job.stage, job.progress = "perception", 0.15
@@ -127,7 +129,8 @@ class Analyzer:
             self.warnings.append("no_persons")
 
         job.stage, job.progress = "scene", 0.3
-        scene = self._scene(clip, raw)
+        budget.stage = "scene"
+        scene = self._scene(clip, raw, budget)
         self.scene = scene
         people = self._room_people(raw, scene, clip)
 
@@ -253,7 +256,7 @@ class Analyzer:
         a = (anchor[2] - anchor[0]) * (anchor[3] - anchor[1])
         return ix * iy / a if a > 0 else 0.0
 
-    def _scene(self, clip, people):
+    def _scene(self, clip, people, budget):
         """Ground the static anchors once per video on the least-occluded frames."""
         counts = [len(p) for p in people]
         # least-occupied frames, spread over the clip: a retry on the next frame (0.5 s later) sees the same view
@@ -267,7 +270,10 @@ class Analyzer:
         scene = {}
         for name, query in [("desk", "desk"), ("safe", "small grey metal safe"), ("laptop", "laptop"),
                             ("door", "glass door")]:
-            for i in cand:
+            for k, i in enumerate(cand):
+                # ~1-3 s per grounding call and not covered by the checks' budget: retries only with time to spare
+                if not budget.ok(30 if k else 12):
+                    break
                 box = self.vlm.ground(VLM.to_pil(clip.frames[i]), query)
                 if box and self._plausible(name, box, clip):
                     scene[name] = box
@@ -379,13 +385,19 @@ class Analyzer:
             ev.append((i, int(n[max(0, i - 2)]), int(n[min(len(n) - 1, i + 3)])))
         return sorted(ev)
 
-    def _ask_crop(self, clip, i, box, key, margin=0.25, min_side=448):
-        p = self.vlm.p_yes(crop(clip.frames[i], box, margin, min_side=min_side), Q[key])
+    @staticmethod
+    def _answer(p: float, veto: bool) -> float:
+        """A non-finite P(yes) (fp16 overflow) must never remove a finding: it reads as "no" for veto
+        questions, whose "yes" suppresses a finding, and as "yes" for every other question."""
+        return p if math.isfinite(p) else (0.0 if veto else 1.0)
+
+    def _ask_crop(self, clip, i, box, key, margin=0.25, min_side=448, veto=False):
+        p = self._answer(self.vlm.p_yes(crop(clip.frames[i], box, margin, min_side=min_side), Q[key]), veto)
         self.trace.append((round(clip.times[i], 1), key, round(p, 3)))
         return p
 
-    def _ask_full(self, clip, i, key):
-        p = self.vlm.p_yes(VLM.to_pil(clip.frames[i]), Q[key])
+    def _ask_full(self, clip, i, key, veto=False):
+        p = self._answer(self.vlm.p_yes(VLM.to_pil(clip.frames[i]), Q[key]), veto)
         self.trace.append((round(clip.times[i], 1), key, round(p, 3)))
         return p
 
@@ -398,7 +410,7 @@ class Analyzer:
         for tb in ((x1, y1, x1 + 0.6 * w, y2), (x1 + 0.4 * w, y1, x2, y2)):
             img = crop(clip.frames[i], tb, 0.1, min_side=512)
             for key in ("money", "money2"):
-                p = self.vlm.p_yes(img, Q[key])
+                p = self._answer(self.vlm.p_yes(img, Q[key]), veto=False)
                 self.trace.append((round(clip.times[i], 1), key, round(p, 3)))
                 best = max(best, p)
                 if best >= 0.9:
@@ -419,7 +431,7 @@ class Analyzer:
         for i in range(0, len(clip.frames), step):
             if not budget.ok(20):
                 break
-            occ.append((i, bool(tl["beside_safe"][i]) or self._ask_full(clip, i, "occupied") >= TH["occupied"]))
+            occ.append((i, bool(tl["beside_safe"][i]) or self._ask_full(clip, i, "occupied", veto=True) >= TH["occupied"]))
         for (i0, o0), (i1, o1), (i2, o2) in zip(occ, occ[1:], occ[2:]):
             if o0 and not o1 and not o2 and not any(s <= i1 <= e + step for s, e in gaps):
                 gaps.append((i1, min(len(clip.frames) - 1, i2 + step)))
@@ -447,7 +459,7 @@ class Analyzer:
                 ps = self._ask_crop(clip, iv, scene["laptop"], "screen", margin=0.4)
                 if ps >= TH["screen"] and (
                         self._ask_crop(clip, iv, scene["laptop"], "lid_open", margin=0.4) < 0.5 or
-                        self._ask_crop(clip, iv, scene["laptop"], "lock_screen", margin=0.4) >= 0.5):
+                        self._ask_crop(clip, iv, scene["laptop"], "lock_screen", margin=0.4, veto=True) >= 0.5):
                     ps = 0.0   # closed lid or lock screen: not working content
                 if ps >= TH["screen"]:
                     out.append(Finding("T02_PC_UNLOCKED_UNATTENDED", t_leave, ps,
@@ -534,7 +546,7 @@ class Analyzer:
                 k, k2 = self._idx(clip, i + 3), self._idx(clip, i + 6)
                 pe, pe2 = self._ask_full(clip, k, "extra_person"), self._ask_full(clip, k2, "extra_person")
                 if max(pe, pe2) >= TH["extra_person"]:
-                    seated = self._ask_full(clip, k2, "visitor_seated")
+                    seated = self._ask_full(clip, k2, "visitor_seated", veto=True)
                     if seated < TH["visitor_seated"] or after >= 3:
                         kb = k if pe >= pe2 else k2
                         out.append(Finding("T06_UNAUTHORIZED_PERSON_CASH_ZONE", clip.times[kb], max(pe, pe2),
@@ -577,7 +589,7 @@ class Analyzer:
             if not budget.ok(4) or after != 1:
                 continue
             k0 = self._idx(clip, i + 2)
-            if self._ask_full(clip, k0, "visitor_seated") >= TH["visitor_seated"]:
+            if self._ask_full(clip, k0, "visitor_seated", veto=True) >= TH["visitor_seated"]:
                 continue                    # someone still sits opposite: not a real departure
             # the count must already be going on right as the visitor leaves (a later, new activity
             # such as tidying up is normal)
@@ -604,21 +616,21 @@ class Analyzer:
                     p2 = self.trace[-1][2]
                     # from behind, banknotes counted at face height read as drinking (X-1): banknotes in the
                     # hands veto it (P = 0.81-0.99 there vs <= 0.17 while really drinking in X-46)
-                    held = max((self._ask_crop(clip, k, scene["desk"], "money_in_hands", margin=0.35, min_side=640)
-                                if "desk" in scene else self._ask_full(clip, k, "money_in_hands")) for k in (i, j))
+                    held = max((self._ask_crop(clip, k, scene["desk"], "money_in_hands", margin=0.35, min_side=640, veto=True)
+                                if "desk" in scene else self._ask_full(clip, k, "money_in_hands", veto=True)) for k in (i, j))
                     if held < TH["money_in_hands"]:
                         out.append(Finding("T11_FOOD_DRINK_AT_DESK", clip.times[i], min(p1, p2),
                                            "На видео работник за рабочим столом пьёт из чашки", [(i, None), (j, None)]))
             if self._ask_full(clip, i, "personal") >= TH["personal"]:
                 p1 = self.trace[-1][2]
-                if "desk" not in scene or self._ask_crop(clip, i, scene["desk"], "bag") < TH["bag"]:
+                if "desk" not in scene or self._ask_crop(clip, i, scene["desk"], "bag", veto=True) < TH["bag"]:
                     out.append(Finding("T10_PERSONAL_ITEMS_AT_DESK", clip.times[i], p1,
                                        "На видео на рабочем столе лежат верхняя одежда и/или сумка", [(i, None)]))
             if "safe" in scene:
                 po = self._ask_crop(clip, i, scene["safe"], "safe_open", margin=0.3)
                 unattended = False
                 if po >= TH["safe_open"] and not tl["near_safe"][i]:
-                    unattended = self._ask_full(clip, i, "at_safe") < TH["at_safe"]
+                    unattended = self._ask_full(clip, i, "at_safe", veto=True) < TH["at_safe"]
                 runs.append((i, unattended, po))
         # Open with nobody at it on two consecutive scans -> verify duration every ~2 s.
         # Normal use (take/put something from the chair) closes within ~6 s; flag >= 9 s,

@@ -83,11 +83,11 @@ class VLM:
                         logits_to_keep=1).logits[0, -1].float()
         p = torch.sigmoid(torch.logsumexp(lg[self.yes], 0) - torch.logsumexp(lg[self.no], 0)).item()
         if not math.isfinite(p):
-            # fp16 overflow: a NaN would silently read as "no" on every threshold. Recall first -> "yes",
-            # and the analyzer marks the result partial.
+            # fp16 overflow: returned as NaN (which would read as "no" on every threshold); the caller picks
+            # the recall-safe answer per question and the result is marked partial
             self.nan += 1
             log.error("VLM returned a non-finite P(yes) for %r", question[:60])
-            return 1.0
+            return math.nan
         return p
 
     @torch.inference_mode()
