@@ -17,6 +17,20 @@ Checked and **rejected**:
 * The 1999/2001 cash rules: they lost force on 01.01.2020.
 * An unverified prg.kz page on cash-room technical requirements: its jurisdiction and status could not be confirmed.
 
+| NBRK_34 | Requirements for security and continuity of banks' information systems (Требования к безопасности и беспрерывности работы информационных систем банков…) | NBRK Board Resolution of 28.01.2016 No. 34, reg. MoJ No. 13256 | In force (updated). Para. 4 subpara. 1 and para. 5 verified on adilet on 2026-10-17 | https://adilet.zan.kz/rus/docs/V1600013256 |
+
+**v0.2 type → rule mapping (aligned with the team's Excel):**
+
+| Type | Rules | Grounding |
+|---|---|---|
+| T02 laptop left on | NBRK 34 para. 4 subpara. 1; para. 5; ARDFM 53 para. 71 subpara. 9 | weak (they require access protection, not switching off) |
+| T06 two clients at once | NBRK 231 para. 20 parts 2 and 1 | weak |
+| T12 documents not checked | NBRK 231 para. 19 subpara. 1 (para. 31 subpara. 1 for issuing) | medium (conditional: ID may be digital) |
+| T13 money mixed | NBRK 231 para. 20 part 2 | medium |
+| T14 issued without recount | NBRK 231 para. 31 subpara. 4; para. 35 | strong |
+| T15 not counted | NBRK 231 para. 19 subpara. 2; para. 20 part 1 | medium |
+| T10 personal items | NBRK 231 para. 12 part 1 (the Excel says "no direct norm"; para. 12 is a direct, verified norm) | strong |
+
 ## 2. How a rule is matched to a video fragment
 
 ```

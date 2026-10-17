@@ -42,11 +42,16 @@ Q = {
     "extra_person": "Is there a standing person right next to the seated worker, on the same side of the desk as the worker (not a visitor sitting opposite)?",
     "visitor_seated": "Is anyone sitting on the visitor side of the desk, across from the worker?",
     "at_safe": "Is a person standing at the small metal safe and using it right now?",
+    "id_shown": "Is the visitor showing or handing an ID card, a passport or another document to the worker, or is the worker looking at such a document?",
+    "handover": "Is the visitor handing money, a bag or a package to the worker or putting it on the desk?",
+    "two_visitors": "Are there two different visitors at the worker's desk at the same time (besides the worker)?",
+    "merging": "Is the worker putting one stack of banknotes on top of another stack, combining two piles of money into one?",
 }
 # decision thresholds on P(yes) (set on the training probe set; recall first)
 TH = {"money": 0.3, "bag": 0.6, "docs": 0.55, "screen": 0.75, "safe_open": 0.4, "key": 0.5,
       "personal": 0.7, "drinking": 0.6, "door_open": 0.72, "carry_bag": 0.6, "doc_handover": 0.7,
-      "counting": 0.6, "extra_person": 0.6, "visitor_seated": 0.5, "at_safe": 0.5, "occupied": 0.5}
+      "counting": 0.6, "extra_person": 0.6, "visitor_seated": 0.5, "at_safe": 0.5, "occupied": 0.5,
+      "id_shown": 0.6, "handover": 0.5, "two_visitors": 0.85, "merging": 0.6}
 
 
 @dataclass
@@ -98,8 +103,8 @@ class Analyzer:
         job.stage, job.progress = "checks", 0.4
         tl = self._timeline(clip, people, scene)
         findings: list[Finding] = []
-        checks = [self._check_departures, self._check_changeover, self._check_entries,
-                  self._check_exits, self._check_periodic]
+        checks = [self._check_departures, self._check_changeover, self._check_entries, self._check_service,
+                  self._check_periodic]
         for i, chk in enumerate(checks):
             if not budget.ok(8):
                 partial = True
@@ -403,6 +408,7 @@ class Analyzer:
                         out.append(Finding("T03_SAFE_LEFT_OPEN", t_leave, min(po, pe),
                                            "На видео работник отходит от рабочего места, дверца сейфа остаётся открытой",
                                            [(leave_idx, None), (e, scene["safe"])]))
+                # T04: key left in the safe lock (the key is only a few pixels: low recall, see limitations)
                 pk = self._ask_crop(clip, iv, scene["safe"], "key", margin=0.15)
                 if pk >= TH["key"]:
                     out.append(Finding("T04_KEY_LEFT_IN_SAFE", t_leave, pk * 0.8,
@@ -442,46 +448,17 @@ class Analyzer:
         for i, before, after in self._count_events(tl, up=True):
             if not budget.ok(6):
                 break
-            j = self._idx(clip, i + 2)
-            # T09: collector with a green bag; was any document handed over in the next ~10 s?
-            collector = self._ask_full(clip, j, "carry_bag") >= TH["carry_bag"]
-            # T09 is experimental (1 positive / 1 negative clip, unstable): off unless FORTE_EXPERIMENTAL=1
-            if collector and "desk" in scene and config.EXPERIMENTAL:
-                # when does the bag land on the desk? A document must be shown before that.
-                bag_at = None
-                for k in range(i + 2, min(len(clip.frames) - 2, i + 30), 2):
-                    if not budget.ok(4):
-                        break
-                    if self._ask_crop(clip, k, scene["desk"], "bag_alone") >= TH["bag"] and \
-                            self._ask_crop(clip, k + 2, scene["desk"], "bag_alone") >= TH["bag"]:
-                        bag_at = k
-                        break
-                if bag_at is not None:
-                    seen_doc = 0.0
-                    for k in range(i, bag_at, 2):
-                        if not budget.ok(4):
-                            break
-                        seen_doc = max(seen_doc, self._ask_full(clip, k, "doc_handover"))
-                        if seen_doc >= TH["doc_handover"]:
-                            break
-                    if seen_doc < TH["doc_handover"]:
-                        out.append(Finding("T09_COLLECTOR_NO_DOC_CHECK", clip.times[bag_at],
-                                           0.5 + 0.3 * (1 - seen_doc),
-                                           "На видео входит человек с зелёной инкассаторской сумкой; сумка оказывается на "
-                                           "рабочем столе, передачи или проверки какого-либо документа до этого на кадрах "
-                                           "не видно", [(j, None), (bag_at, scene["desk"])]))
-            # T06: an additional person standing next to the worker, persisting (not a visitor about to sit
-            # down, not the collector during a handover)
-            if after >= 2 and not collector:
+            # T06: two different visitors at the desk at the same time (a new one arrives while the first
+            # is still being served), confirmed twice ~1.5 s apart
+            if after >= 3:
                 k, k2 = self._idx(clip, i + 3), self._idx(clip, i + 6)
-                pe = self._ask_full(clip, k, "extra_person")
-                if pe >= TH["extra_person"]:
-                    pe2 = self._ask_full(clip, k2, "extra_person")
-                    seated = self._ask_full(clip, k2, "visitor_seated")
-                    if pe2 >= TH["extra_person"] and (seated < TH["visitor_seated"] or after >= 3):
-                        out.append(Finding("T06_UNAUTHORIZED_PERSON_CASH_ZONE", clip.times[k], min(pe, pe2),
-                                           "На видео рядом с работником, на его стороне рабочего стола, несколько секунд "
-                                           "находится ещё один стоящий человек", [(k, None), (k2, None)]))
+                p1 = self._ask_full(clip, k, "two_visitors")
+                if p1 >= TH["two_visitors"]:
+                    p2 = self._ask_full(clip, k2, "two_visitors")
+                    if p2 >= TH["two_visitors"]:
+                        out.append(Finding("T06_TWO_CLIENTS_AT_ONCE", clip.times[k], min(p1, p2),
+                                           "На видео у рабочего стола одновременно находятся два посетителя, работник "
+                                           "взаимодействует с обоими", [(k, None), (k2, None)]))
             # T07: room was empty, someone enters and walks on without turning back to the door.
             # Closing the door is visible as the person returning to the door zone right after entering
             # (relative motion, camera-angle independent); the glass-door state itself is ambiguous.
@@ -504,29 +481,44 @@ class Analyzer:
                                                 (self._idx(clip, i + left + 4), door)]))
         return out
 
-    def _check_exits(self, clip, people, scene, tl, budget):
-        """A visitor leaves while the worker keeps handling cash (counting not in the client's presence)."""
+    def _check_service(self, clip, people, scene, tl, budget):
+        """T12: a visitor is served (hands over money / a bag) without any visible ID document.
+        Service episodes = >= 5 s with someone besides the worker in the room (no reliance on door
+        entries); the first ~20 s of each episode are scanned every second, stopping once an ID is seen."""
         out = []
-        for i, before, after in self._count_events(tl, up=False, min_len=6):
-            if not budget.ok(4) or after != 1:
-                continue
-            k0 = self._idx(clip, i + 2)
-            if self._ask_full(clip, k0, "visitor_seated") >= TH["visitor_seated"]:
-                continue                    # someone still sits opposite: not a real departure
-            # the count must already be going on right as the visitor leaves (a later, new activity
-            # such as tidying up is normal)
-            k = self._idx(clip, i + 2)
-            p = self._ask_full(clip, k, "counting")
-            if p >= TH["counting"]:
-                out.append(Finding("T08_COUNT_WITHOUT_CLIENT", clip.times[i], p * 0.85,
-                                   "На видео посетитель уходит от стола, после чего работник продолжает "
-                                   "пересчитывать наличные / загружать их в счётную машину",
-                                   [(self._idx(clip, i - 1), None), (k, None)]))
+        min_len = int(5 * config.SAMPLE_FPS)
+        segs = self._segments(tl["n"] >= 2, True, min_len=min_len)
+        segs = sorted(segs, key=lambda g: g[1] - g[0], reverse=True)[:3]
+        step = max(1, int(round(config.SAMPLE_FPS)))
+        for s, e in sorted(segs):
+            end = min(e + 1, s + int(20 * config.SAMPLE_FPS))
+            id_max, hand_at = 0.0, None
+            for k in range(s, end, step):
+                if not budget.ok(6):
+                    break
+                id_max = max(id_max, self._ask_full(clip, k, "id_shown"))
+                if id_max >= TH["id_shown"]:
+                    break
+                if hand_at is None and (k - s) % (2 * step) == 0 and \
+                        self._ask_full(clip, k, "handover") >= TH["handover"]:
+                    hand_at = k
+            # the episode must have been scanned for a while (>= 8 s) before claiming "no ID seen"
+            scanned = (min(end, e + 1) - s) >= int(8 * config.SAMPLE_FPS)
+            # a visitor must really be there (the person count can include a stray track)
+            mid = self._idx(clip, (s + min(end, e)) // 2)
+            if id_max < TH["id_shown"] and scanned and budget.ok(4) and \
+                    self._ask_full(clip, mid, "visitor_seated") >= TH["visitor_seated"]:
+                k = hand_at if hand_at is not None else self._idx(clip, s + int(6 * config.SAMPLE_FPS))
+                out.append(Finding("T12_ID_NOT_CHECKED", clip.times[k], 0.5 + 0.4 * (1 - id_max),
+                                   "На видео посетитель обслуживается у рабочего стола; предъявления или проверки "
+                                   "удостоверения личности в кадрах обслуживания не видно",
+                                   [(k, None), (self._idx(clip, k + 2 * step), None)]))
         return out
 
     def _check_periodic(self, clip, people, scene, tl, budget):
-        """Sparse scan: personal items, drinking, safe open while nobody is at the safe."""
+        """Sparse scan: money mixing, personal items, drinking, safe open while nobody is at the safe."""
         out = []
+        # T13 (money mixing) is not detected: the VLM could not separate it (X-44 0.007 vs normal X-45 0.23)
         step = max(1, int(round(4.0 * config.SAMPLE_FPS)))   # every ~4 s
         runs = []
         for i in range(0, len(clip.frames), step):

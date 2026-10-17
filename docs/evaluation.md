@@ -1,5 +1,26 @@
 ﻿# Evaluation (Phase 5)
 
+## Update: types aligned with the team's Excel (v9 → v10)
+Labels now use the team's verified Excel types (X-22 corrected to "key left in the safe lock").
+**v9, full run on 40 clips:** TP 13 · FN 8 · FP 2 · TN 17. Recall 0.62, precision 0.87, correct type 12/22, timecode median 1.9 s, 32 s/clip.
+**v10:** the two false alarms were fixed (T12 now requires a visitor actually present; T06 needs P ≥ 0.85) and verified on X-5, X-12 (now clean) and X-17, X-18 (still detected). Expected on the full set: **TP 13 · FP 0**.
+
+| Excel type | Episodes | Found with correct type |
+|---|---|---|
+| T01 valuables/documents left | 3 | 3 |
+| T02 laptop left on | 2 | 2 |
+| T03 safe open | 1 | 1 |
+| T05 cash left as the next client approaches | 2 | 2 |
+| T06 two clients at once (new) | 1 | 1 |
+| T10 personal items | 1 | 1 |
+| T11 drinks | 1 | 1 |
+| T12 documents not checked (new) | 3 | 1 (X-17) |
+| T04 key in the lock | 1 | 0: the key is too small to see |
+| T07 door not closed | 3 | 0: door state is ambiguous |
+| T13 money mixed / T14 issued without recount / T15 not counted | 4 | 0: not detectable with this model |
+
+The sections below describe the earlier v2–v7 runs, which used my Phase 1 type interpretation.
+
 **Method.** Full pipeline run on all 40 unique training clips (duplicates X-47 = X-4 and X-48 = X-5 merged; X-4 carries both labelled events). Video-level verdict versus label; timecode error versus the single labelled second; type checked against the Phase 1 taxonomy.
 **Important caveat:** all rules and thresholds were set by looking at these same clips, so the numbers are **in-sample and optimistic**. The dataset (21 positives across 11 types) is too small for an honest held-out split per type. A pseudo-new-angle set (40 warped clips: perspective, rotation, mirror, crop, landscape) was built (`tools/make_pseudo_angles.py`), but its full evaluation was not completed in the time available.
 

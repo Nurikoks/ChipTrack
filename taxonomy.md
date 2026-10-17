@@ -1,4 +1,28 @@
-# Violation taxonomy, draft v0.1 (Phase 1, for review)
+# Violation taxonomy v0.2: aligned with the team's verified Excel
+
+The team's file `ForteBank_видео_и_нормы_НБРК.xlsx` (descriptions of every labelled episode) is the **ground truth**. It replaces my Phase 1 interpretation wherever they differ: X-13, X-22, X-34, X-17, X-18, X-1, X-2, X-44, X-47.
+
+| Type (API `type`) | Episodes (Excel) | How the service detects it | Status |
+|---|---|---|---|
+| T01 «Ценности/документы оставлены без присмотра на рабочем месте» | X-15 (package on the chair), X-24 (log book), X-26 (money) | workplace left → desk tiles: money / bag / documents | works |
+| T02 «Ноутбук оставлен включённым без присмотра» | X-11, X-28 | workplace left → laptop crop: screen on with content, not closed/lock screen | works |
+| T03 «Сейф оставлен открытым» | X-20 | safe open with nobody at it (duration rule) / at departure | works |
+| T04 «Ключи оставлены в замочной скважине сейфа» | X-22 (team correction of the Excel row) | workplace left → safe crop: key in the lock | low recall: the key is 3–5 px |
+| T05 «Наличные предыдущей операции оставлены открыто при подходе следующего клиента» | X-4, X-38 | changeover → money on the desk | works |
+| T06 «Обслуживание двух клиентов одновременно» | X-18 | entry while two people are already present → "two visitors at the desk" confirmed twice | new |
+| T07 «Дверь кассового помещения не закрыта» | X-30, X-32, X-33 | entry into an empty room without turning back to the door | weak |
+| T10 «Личные вещи на рабочем месте кассира» | X-40 | periodic: coat/handbag on the desk | works |
+| T11 «Напитки на рабочем месте кассира» | X-46 | periodic: drinking at the desk (confirmed) | works |
+| T12 «Не проверены документы клиента» | X-2, X-17, X-34 | service episodes (≥ 5 s with a visitor): scan up to 20 s every second; no ID document seen (max P < 0.6) is flagged | new, conditional (ID could be digital); X-2 missed |
+| T13 «Смешение денег разных операций/клиентов» | X-44, X-47 | **not detected**: the VLM can't see two piles being combined (X-44 0.007 vs normal X-45 0.23) | gap |
+| T14 «Выдача денег без пересчёта при клиенте» | X-1 | **not detected yet** (needs "recount before handover" sequence) | gap |
+| T15 «Принятые деньги не пересчитаны» | X-13 | **not detected yet** (absence of counting) | gap |
+
+Removed (not in the Excel): «Пересчёт наличных клиента в его отсутствие», «Приём сумки у инкассатора без проверки документов» (folded into T12). «Ключи в замочной скважине сейфа» (T04) was restored after the team corrected X-22.
+
+---
+
+# (History) Violation taxonomy, draft v0.1 (Phase 1)
 
 Status: **draft, waiting for team confirmation.** Every type below comes from frames we actually looked at. Rule citations are deliberately missing; they are Phase 2 work and will be added only from verified Republic of Kazakhstan (RK) sources.
 
