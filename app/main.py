@@ -1,5 +1,8 @@
 """FastAPI service: jury API (/api/v1, X-API-Key) + reviewer web UI (/, /ui/*)."""
+import base64
+import hashlib
 import logging
+import re
 import secrets
 import shutil
 import tempfile
@@ -9,7 +12,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from . import config
 from .jobs import JobManager
@@ -44,7 +47,10 @@ else:
     analyze = _analyzer.analyze
 
 jobs = JobManager(analyze)
-app = FastAPI(title="ForteBank cash-desk video review", version="0.1")
+# no /docs, /redoc, /openapi.json: Swagger/ReDoc load their JS from a public CDN, on the same origin as the
+# reviewer UI that keeps videos and evidence frames in IndexedDB
+app = FastAPI(title="ForteBank cash-desk video review", version="0.1",
+              docs_url=None, redoc_url=None, openapi_url=None)
 STATIC = Path(__file__).parent / "static"
 STARTED = time.time()
 UPLOAD_PATHS = ("/api/v1/analyze", "/ui/analyze")
@@ -174,9 +180,27 @@ def api_job(job_id: str):
 
 
 # ---- Reviewer UI (no auth by requirement; same pipeline, lower priority than the jury API) ----
+_INLINE_SCRIPT = re.compile(rb"<script>(.*?)</script>", re.S)
+
+
+def _index_page() -> tuple[bytes, dict]:
+    """index.html with a CSP that allows only its own inline script, by hash. The hash is taken from the
+    file as served, so an edited page never needs a hardcoded hash updated (and never runs without one)."""
+    body = (STATIC / "index.html").read_bytes()
+    # the HTML parser turns CR LF / CR into LF before the browser hashes a script's text
+    scripts = (m.group(1).replace(b"\r\n", b"\n").replace(b"\r", b"\n") for m in _INLINE_SCRIPT.finditer(body))
+    hashes = " ".join("'sha256-%s'" % base64.b64encode(hashlib.sha256(s).digest()).decode() for s in scripts)
+    csp = ("default-src 'none'; script-src " + (hashes or "'none'") + "; style-src 'unsafe-inline'; "
+           "img-src 'self' data:; media-src blob:; connect-src 'self'; "
+           "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+    return body, {"Content-Security-Policy": csp, "Referrer-Policy": "no-referrer",
+                  "X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"}
+
+
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    body, headers = _index_page()
+    return Response(body, media_type="text/html; charset=utf-8", headers=headers)
 
 
 @app.post("/ui/analyze")
@@ -187,13 +211,22 @@ async def ui_analyze(request: Request, file: UploadFile = File(...)):
 @app.get("/ui/jobs/{job_id}")
 def ui_job(job_id: str):
     job = jobs.get(job_id)
-    if job is None or job.via != "ui":   # jury results (evidence frames of people) need the key
+    if job is None or job.via != "ui" or job.discarded:   # jury results (evidence frames of people) need the key
         raise HTTPException(404, "job not found")
     out = job.public()
     if job.status == "processing":
         out["queue_position"] = jobs.queue_position(job_id)
         out["elapsed_sec"] = round(time.time() - job.created)
     return out
+
+
+@app.delete("/ui/jobs/{job_id}", status_code=204)
+def ui_job_delete(job_id: str):
+    """The reviewer removed this check from their history: forget its result (evidence frames of people)
+    now instead of after RESULT_TTL_SEC. A queued job is cancelled; a running one is dropped once it ends."""
+    if not jobs.discard(job_id, via="ui"):   # jury jobs: same 404 as GET /ui/jobs
+        raise HTTPException(404, "job not found")
+    return Response(status_code=204)
 
 
 @app.exception_handler(RequestValidationError)

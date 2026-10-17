@@ -42,6 +42,7 @@ class Job:
     result: dict | None = None
     error: str | None = None
     finished: float | None = None
+    discarded: bool = False              # removed by the reviewer while running: drop it once it ends
 
     @property
     def deadline(self) -> float:
@@ -79,7 +80,8 @@ class JobManager:
         threading.Thread(target=self._janitor, daemon=True, name="janitor").start()
 
     def submit(self, path: Path, filename: str, via: str = "api", created: float | None = None) -> Job:
-        job = Job(id=uuid.uuid4().hex[:12], path=path, filename=filename, via=via,
+        # full 128-bit id: /ui/jobs is unauthenticated, so the id is all that guards a reviewer's result
+        job = Job(id=uuid.uuid4().hex, path=path, filename=filename, via=via,
                   created=created or time.time())
         with self._lock:
             self._jobs[job.id] = job
@@ -90,6 +92,28 @@ class JobManager:
     def get(self, job_id: str) -> Job | None:
         with self._lock:
             return self._jobs.get(job_id)
+
+    def discard(self, job_id: str, via: str) -> bool:
+        """Forget a `via` job and its result now. A queued job never runs; the running one is dropped
+        when it ends (the GPU call cannot be interrupted). False if there is no such job."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.via != via:
+                return False
+            if job is self._running and job.status == "processing":
+                job.discarded = True
+                log.info("job %s discarded while running: dropped when it ends", job_id)
+                return True
+            del self._jobs[job_id]
+        if job.status == "processing":         # still queued: _run skips a job it cannot find
+            job.error, job.status, job.finished = "cancelled", "failed", time.time()
+            try:
+                job.path.unlink(missing_ok=True)
+            except OSError:                    # the worker picked it up just now: _run deletes it
+                log.warning("could not delete %s", job.path)
+        job.result = None
+        log.info("job %s discarded", job_id)
+        return True
 
     def queue_position(self, job_id: str) -> int:
         with self._q.mutex:              # the worker mutates the heap concurrently
@@ -152,6 +176,10 @@ class JobManager:
                 log.warning("could not delete %s", job.path)
             log.info("job %s %s in %.1fs (total since request %.1fs)", jid, job.status,
                      time.time() - t0, time.time() - job.created)
+            if job.discarded:
+                with self._lock:
+                    self._jobs.pop(jid, None)
+                job.result = None
 
     def _watchdog(self, now: float):
         """The deadline is cooperative; a hung decode/CUDA call would otherwise leave the running job

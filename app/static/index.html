@@ -6,149 +6,727 @@
 <title>Проверка кассовой дисциплины</title>
 <style>
   :root { --bg:#f5f6f8; --card:#fff; --ink:#1d2330; --muted:#5d6678; --line:#e1e4ea;
-          --ok:#1e7a46; --ok-bg:#e6f4ec; --warn:#a4231c; --warn-bg:#fbe9e7; --part:#8a5300; --part-bg:#fdf1dc; --accent:#0b5cad; }
+          --ok:#1e7a46; --ok-bg:#e6f4ec; --warn:#a4231c; --warn-bg:#fbe9e7; --part:#8a5300; --part-bg:#fdf1dc; --accent:#0b5cad;
+          --side:#eceef2; --hover:rgba(20,30,50,.06); --active:#dce3ee; }
   @media (prefers-color-scheme: dark) {
     :root { --bg:#14171c; --card:#1d2128; --ink:#e7eaf0; --muted:#a2abbb; --line:#2f3540;
-            --ok:#6fd39b; --ok-bg:#163223; --warn:#ff8f85; --warn-bg:#3a1c1a; --part:#ffc56b; --part-bg:#3a2c12; --accent:#6aa9ff; }
+            --ok:#6fd39b; --ok-bg:#163223; --warn:#ff8f85; --warn-bg:#3a1c1a; --part:#ffc56b; --part-bg:#3a2c12; --accent:#6aa9ff;
+            --side:#101317; --hover:rgba(255,255,255,.05); --active:#262d38; }
   }
   * { box-sizing: border-box; }
-  body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--ink); }
-  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--ink); overflow:hidden; }
+  .app { display: grid; grid-template-columns: 280px minmax(0, 1fr); height: 100vh; height: 100dvh; }
+
+  /* ---- history sidebar ---- */
+  aside { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .side-head { padding: 16px 12px 8px; display: flex; flex-direction: column; gap: 10px; }
+  .brand { font-weight: 700; font-size: 16px; padding: 0 6px; }
+  .brand span { color: var(--muted); font-weight: 400; font-size: 13px; display: block; }
+  .new { display: flex; align-items: center; gap: 8px; width: 100%; background: var(--card); color: var(--ink); border: 1px solid var(--line);
+         border-radius: 8px; padding: 9px 12px; font: inherit; font-weight: 600; cursor: pointer; }
+  .new:hover { border-color: var(--accent); }
+  #search { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 14px; }
+  #list { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+  .group { font-size: 12px; font-weight: 600; color: var(--muted); padding: 14px 8px 4px; }
+  .empty { color: var(--muted); font-size: 14px; padding: 16px 8px; }
+  .item { display: flex; align-items: center; border-radius: 8px; }
+  .item:hover { background: var(--hover); }
+  .item.active { background: var(--active); }
+  .item a { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 8px 4px 8px 8px; color: inherit; text-decoration: none; border-radius: 8px; }
+  .txt { min-width: 0; flex: 1; }
+  .name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+  .sub { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--muted); }
+  .dot.bad { background: var(--warn); } .dot.ok { background: var(--ok); } .dot.part { background: var(--part); }
+  .dot.fail { background: transparent; border: 2px solid var(--muted); }
+  .dot.run { background: transparent; border: 2px solid var(--accent); border-top-color: transparent; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .unseen { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+  .del { opacity: 0; background: none; border: 0; color: var(--muted); padding: 4px 8px; margin-right: 4px; border-radius: 6px; font-size: 18px; line-height: 1; cursor: pointer; }
+  .item:hover .del, .item:focus-within .del, .item.active .del { opacity: 1; }
+  .del:hover { color: var(--warn); background: var(--hover); }
+  @media (hover: none) { .del { opacity: 1; } }
+  .side-foot { border-top: 1px solid var(--line); padding: 10px 14px 14px; font-size: 12px; color: var(--muted); }
+  .side-foot p { margin: 0 0 6px; }
+  .link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+
+  /* ---- main area ---- */
+  main { overflow-y: auto; min-width: 0; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 24px 24px 64px; }
+  .top { display: none; }
   h1 { font-size: 22px; margin: 0 0 4px; }
-  .sub { color: var(--muted); margin: 0 0 20px; }
+  h2 { font-size: 20px; margin: 0; overflow-wrap: anywhere; }
+  .sub-h { color: var(--muted); margin: 0 0 20px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
   .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 28px; text-align: center; cursor: pointer; }
-  .drop.over { border-color: var(--accent); }
-  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 10px 18px; font-size: 15px; cursor: pointer; }
-  button:disabled { opacity: .5; cursor: default; }
+  .drop.over, .drop:hover { border-color: var(--accent); }
+  .btn { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 10px 18px; font: inherit; cursor: pointer; }
+  .btn:disabled { opacity: .5; cursor: default; }
   .bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 10px 0 6px; }
   .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  .check-head { margin-bottom: 14px; }
+  /* ---- test mode (FORTE_DUMMY=1): fake results must never pass for real ones ---- */
+  .sticky { position: sticky; top: 0; z-index: 5; }
+  .testbar { background: repeating-linear-gradient(-45deg, #f5c518 0 14px, #1d2330 14px 28px); padding: 4px; }
+  .testbar div { background: #f5c518; color: #1d2330; font-weight: 700; text-align: center; padding: 8px 12px; border-radius: 4px; font-size: 14px; }
+  .testbar.inline { border-radius: 8px; margin-bottom: 12px; }
+  .testtag { flex: none; background: #f5c518; color: #1d2330; font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 1px 5px; border-radius: 4px; }
+  .dot.test { background: repeating-linear-gradient(-45deg, #f5c518 0 3px, #1d2330 3px 6px); border: 1px solid #f5c518; }
   .verdict { font-size: 20px; font-weight: 600; padding: 14px 16px; border-radius: 8px; }
   .verdict.ok { background: var(--ok-bg); color: var(--ok); }
   .verdict.bad { background: var(--warn-bg); color: var(--warn); }
   .verdict.part { background: var(--part-bg); color: var(--part); }
   .viol h3 { margin: 0 0 6px; font-size: 17px; }
+  .viol.flash { outline: 2px solid var(--accent); outline-offset: 2px; }
   .meta { color: var(--muted); font-size: 14px; margin-bottom: 8px; }
   .frames { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
   .frames figure { margin: 0; flex: 1 1 200px; max-width: 300px; }
   .frames img { width: 100%; border-radius: 6px; border: 1px solid var(--line); cursor: zoom-in; }
-  .frames figcaption { font-size: 13px; color: var(--muted); }
+  .frames figcaption { font-size: 13px; color: var(--muted); margin-top: 4px; }
   .rule { font-size: 14px; background: var(--bg); border-radius: 6px; padding: 8px 10px; margin-top: 8px; }
   .rule a { color: var(--accent); word-break: break-all; }
   .note { font-size: 13px; color: var(--muted); }
-  .err { color: var(--warn); }
+  .err { color: var(--warn); margin: 0 0 10px; }
+
+  /* ---- player + violation timeline ---- */
+  .player { padding: 12px; }
+  .player video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; display: block; }
+  .track { position: relative; height: 14px; margin: 14px 6px 4px; background: var(--line); border-radius: 4px; cursor: pointer; }
+  .head { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); pointer-events: none; }
+  .mark { position: absolute; top: -5px; width: 12px; height: 24px; transform: translateX(-50%); background: var(--warn);
+          border: 2px solid var(--card); border-radius: 4px; padding: 0; cursor: pointer; }
+  .mark:hover, .mark:focus-visible { transform: translateX(-50%) scale(1.2); }
+  .tc { background: var(--bg); color: var(--accent); border: 1px solid var(--line); border-radius: 6px; padding: 1px 8px;
+        font: 600 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-variant-numeric: tabular-nums; cursor: pointer; }
+  .tc:hover { border-color: var(--accent); }
+  .frames .tc { font-size: 13px; }
+  .novideo .tc { cursor: default; color: var(--ink); border-color: transparent; }
+
   dialog { border: 0; padding: 0; background: transparent; max-width: 95vw; }
   dialog img { max-width: 95vw; max-height: 92vh; border-radius: 8px; }
   dialog::backdrop { background: rgba(0,0,0,.75); }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px;
+           border-radius: 8px; font-size: 14px; max-width: calc(100vw - 32px); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 30; }
+  #toast.show { opacity: 1; }
+  #scrim { display: none; }
+
+  /* ---- phone: the history becomes a drawer ---- */
+  @media (max-width: 800px) {
+    .app { grid-template-columns: minmax(0, 1fr); }
+    aside { position: fixed; inset: 0 auto 0 0; width: min(300px, 85vw); z-index: 20; transform: translateX(-100%); transition: transform .2s; }
+    aside.open { transform: none; box-shadow: 0 0 40px rgba(0,0,0,.3); }
+    #scrim.open { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 10; }
+    .top { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 5; background: var(--bg);
+           border-bottom: 1px solid var(--line); padding: 8px 16px; }
+    .top button { background: none; border: 1px solid var(--line); color: var(--ink); border-radius: 8px; padding: 4px 10px; font-size: 18px; cursor: pointer; }
+    .top span { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .wrap { padding: 16px 16px 48px; }
+  }
 </style>
 </head>
 <body>
-<main>
-  <h1>Проверка видеозаписи кассового рабочего места</h1>
-  <p class="sub">Сервис ищет визуально наблюдаемые признаки возможных нарушений кассовой дисциплины. Результат — подсказка для проверяющего, а не юридическое или дисциплинарное заключение.</p>
-
-  <section class="card" id="upload">
-    <div class="drop" id="drop">
-      <p><b>Перетащите видеофайл сюда</b> или нажмите, чтобы выбрать (.mov, .mp4)</p>
-      <input type="file" id="file" accept=".mov,.mp4,.m4v,.avi,.mkv,video/*" hidden>
-      <p class="note" id="fname">Файл не выбран</p>
+<div class="app">
+  <aside id="side" aria-label="История проверок">
+    <div class="side-head">
+      <div class="brand">ChipTrack<span>Проверка кассовой дисциплины</span></div>
+      <button class="new" id="newBtn"><span aria-hidden="true">＋</span> Новая проверка</button>
+      <input type="search" id="search" placeholder="Поиск по имени файла" aria-label="Поиск по истории">
     </div>
-    <p style="margin:14px 0 0"><button id="go" disabled>Запустить анализ</button></p>
-  </section>
+    <nav id="list"></nav>
+    <div class="side-foot">
+      <p>Видео и кадры с людьми хранятся только в этом браузере, пока вы их не удалите.</p>
+      <p id="usage"></p>
+      <p id="storeNote" class="err"></p>
+      <button class="link" id="clearAll">Очистить историю</button>
+    </div>
+  </aside>
+  <div id="scrim"></div>
 
-  <section class="card" id="status" hidden>
-    <div id="stage">Загрузка файла…</div>
-    <div class="bar"><div id="barfill"></div></div>
-    <div class="note" id="statnote"></div>
-  </section>
+  <main id="main">
+    <div class="sticky">
+      <div class="testbar" id="testBar" role="alert" hidden><div>ТЕСТОВЫЙ РЕЖИМ — модели не загружены, сервис выдаёт фиктивные результаты. Не используйте их для оценки.</div></div>
+      <header class="top"><button id="menu" aria-label="Открыть историю">☰</button><span id="topTitle">Новая проверка</span></header>
+    </div>
 
-  <section id="result" hidden></section>
-</main>
+    <div class="wrap" id="viewNew">
+      <h1>Проверка видеозаписи кассового рабочего места</h1>
+      <p class="sub-h">Сервис ищет визуально наблюдаемые признаки возможных нарушений кассовой дисциплины. Результат — подсказка для проверяющего, а не юридическое или дисциплинарное заключение.</p>
+      <section class="card">
+        <div class="drop" id="drop" role="button" tabindex="0">
+          <p><b>Перетащите видеофайл сюда</b> или нажмите, чтобы выбрать (.mov, .mp4)</p>
+          <input type="file" id="file" accept=".mov,.mp4,.m4v,.avi,.mkv,video/*" hidden>
+          <p class="note" id="fname">Файл не выбран</p>
+        </div>
+        <p style="margin:14px 0 0"><button class="btn" id="go" disabled>Запустить анализ</button></p>
+      </section>
+      <p class="note">Каждая проверка сохраняется в истории слева вместе с видео: к ней можно вернуться, пока идёт анализ следующего файла.</p>
+    </div>
+
+    <div class="wrap" id="viewCheck" hidden>
+      <div class="check-head"><h2 id="cTitle"></h2><div class="meta" id="cMeta"></div></div>
+      <section class="card player" id="player">
+        <video id="vid" controls playsinline preload="metadata"></video>
+        <div class="track" id="track" title="Метки — найденные события; нажмите, чтобы перейти"></div>
+        <p class="note" id="vidNote"></p>
+      </section>
+      <section class="card" id="cStatus" hidden>
+        <p class="err" id="cErr" hidden></p>
+        <div id="stage"></div>
+        <div class="bar" id="bar"><div id="barfill"></div></div>
+        <div class="note" id="statnote"></div>
+        <button class="btn" id="rerun" hidden>Проверить заново</button>
+      </section>
+      <section id="cResult"></section>
+    </div>
+  </main>
+</div>
 <dialog id="zoom"><img id="zoomimg" alt="Кадр-доказательство"></dialog>
+<div id="toast" role="status"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
-let chosen = null, timer = null;
 
 function mmss(sec) {
   const s = Math.max(0, Math.round(sec)); const m = Math.floor(s / 60);
   return `${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
-function esc(t) { return String(t ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function esc(t) { return String(t ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function mb(b) { return b >= 2**30 ? `${(b / 2**30).toFixed(1)} ГБ` : `${(b / 2**20).toFixed(1)} МБ`; }
+function plural(n, one, few, many) {
+  const a = n % 10, b = n % 100;
+  return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many;
+}
+function uid() { return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2); }
+function when(ts) { return new Date(ts).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); }
+let toastTimer = null;
+function toast(msg) { $("toast").textContent = msg; $("toast").classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => $("toast").classList.remove("show"), 4000); }
 
-function pick(f) { chosen = f; $("fname").textContent = f ? `${f.name} (${(f.size/1048576).toFixed(1)} МБ)` : "Файл не выбран"; $("go").disabled = !f; }
-$("drop").onclick = () => $("file").click();
-$("file").onchange = (e) => pick(e.target.files[0]);
-["dragover","dragenter"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("over"); }));
-["dragleave","drop"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.remove("over"); }));
-$("drop").addEventListener("drop", e => pick(e.dataTransfer.files[0]));
+// ---- local store: IndexedDB ("checks": records with results, "videos": the uploaded files by check id).
+// Falls back to memory when the browser refuses IndexedDB (some private modes): the page still works, history is lost on close.
+const store = (() => {
+  let dbp = null, persistent = true;
+  const mem = { checks: new Map(), videos: new Map() };
+  function open() {
+    if (!dbp) dbp = new Promise((resolve) => {
+      let req;
+      try { req = indexedDB.open("chiptrack", 1); } catch { resolve(null); return; }
+      req.onupgradeneeded = () => {
+        const d = req.result;
+        if (!d.objectStoreNames.contains("checks")) d.createObjectStore("checks", { keyPath: "id" });
+        if (!d.objectStoreNames.contains("videos")) d.createObjectStore("videos");
+      };
+      req.onsuccess = () => {
+        const d = req.result;
+        // site data cleared or a newer schema opened elsewhere: drop the handle, the next call reopens
+        d.onversionchange = () => { d.close(); dbp = null; };
+        d.onclose = () => { dbp = null; };
+        resolve(d);
+      };
+      req.onerror = () => resolve(null);
+      req.onblocked = () => toast("Закройте другие вкладки сервиса: они мешают открыть историю.");
+    }).then(d => { if (!d) persistent = false; return d; });
+    return dbp;
+  }
+  function txn(d, names, mode, fn) {
+    return new Promise((resolve, reject) => {
+      const t = d.transaction(names, mode); const r = fn(t);
+      t.oncomplete = () => resolve(r ? r.result : undefined);
+      // t.error is only set once the transaction aborts; a failed request carries its own error
+      t.onerror = (e) => reject((e.target && e.target.error) || t.error || new Error("storage error"));
+      t.onabort = () => reject(t.error || new Error("transaction aborted"));
+    });
+  }
+  return {
+    get persistent() { return persistent; },
+    open,
+    async list() { const d = await open(); return d ? txn(d, "checks", "readonly", t => t.objectStore("checks").getAll()) : [...mem.checks.values()]; },
+    async put(rec) { const d = await open(); if (!d) { mem.checks.set(rec.id, structuredClone(rec)); return; } return txn(d, "checks", "readwrite", t => t.objectStore("checks").put(rec)); },
+    async putVideo(id, blob) { const d = await open(); if (!d) { mem.videos.set(id, blob); return; } return txn(d, "videos", "readwrite", t => t.objectStore("videos").put(blob, id)); },
+    async getVideo(id) { const d = await open(); return d ? txn(d, "videos", "readonly", t => t.objectStore("videos").get(id)) : mem.videos.get(id); },
+    async videoIds() { const d = await open(); return d ? txn(d, "videos", "readonly", t => t.objectStore("videos").getAllKeys()) : [...mem.videos.keys()]; },
+    async remove(id) {
+      const d = await open();
+      if (!d) { mem.checks.delete(id); mem.videos.delete(id); return; }
+      return txn(d, ["checks", "videos"], "readwrite", t => { t.objectStore("checks").delete(id); t.objectStore("videos").delete(id); });
+    },
+    async clear() {
+      const d = await open();
+      if (!d) { mem.checks.clear(); mem.videos.clear(); return; }
+      return txn(d, ["checks", "videos"], "readwrite", t => { t.objectStore("checks").clear(); t.objectStore("videos").clear(); });
+    },
+  };
+})();
+
+// ---- app state
+// record: {id, filename, size, created, status: uploading|processing|done|failed, jobId, result, error,
+//          video: pending|saved|failed, videoNote, unseen}; stage/progress/queue/elapsed/offline are live progress only
+const checks = new Map();
+const live = new Map();       // id -> File picked in this tab: plays at once, before (or without) the stored copy
+const pollers = new Map();    // id -> poll timer
+const uploads = new Map();    // id -> XMLHttpRequest still sending the file
+let current = null, chosen = null, videoUrl = null;
 
 const STAGES = { queued: "В очереди", analyzing: "Анализ видео", decoding: "Чтение видео", perception: "Поиск людей и предметов",
                  scene: "Определение рабочего места", checks: "Проверка признаков нарушений", report: "Формирование отчёта" };
+const UPLOAD_BEAT_MS = 4000;            // an uploading record is re-saved this often while its tab is alive
+const UPLOAD_STALE_MS = 15000;          // ...so on load, one older than this lost its tab mid-upload
 
-$("go").onclick = async () => {
-  if (!chosen) return;
-  $("go").disabled = true; $("result").hidden = true; $("status").hidden = false;
-  $("stage").textContent = "Загрузка файла…"; $("barfill").style.width = "3%"; $("statnote").textContent = "";
-  const fd = new FormData(); fd.append("file", chosen);
-  try {
-    const r = await fetch("/ui/analyze", { method: "POST", body: fd });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.detail || r.statusText);
-    poll(j.job_id);
-  } catch (e) { fail(`Не удалось загрузить файл: ${e.message}`); }
-};
+// Other tabs of the service share the same IndexedDB: tell them about every change, so they neither show
+// a stale list nor write back a check that was deleted here.
+const bc = "BroadcastChannel" in window ? new BroadcastChannel("chiptrack") : null;
+function announce(msg) { try { if (bc) bc.postMessage(msg); } catch (e) { console.error(e); } }
 
-function poll(id, misses = 0) {
-  clearTimeout(timer);
-  timer = setTimeout(async () => {
-    let j;
-    try {
-      const r = await fetch(`/ui/jobs/${id}`); j = await r.json();
-      if (!r.ok) throw new Error(j.detail || r.statusText);
-    } catch (e) {
-      // a dropped poll must not lose the result: retry a few times before giving up
-      if (misses < 5) { poll(id, misses + 1); return; }
-      fail(`Ошибка связи с сервисом: ${e.message}`); return;
-    }
-    try {
-      if (j.status === "processing") {
-        $("stage").textContent = STAGES[j.stage] || "Анализ видео";
-        $("barfill").style.width = `${Math.max(5, (j.progress || 0) * 100)}%`;
-        $("statnote").textContent = (j.queue_position ? `Позиция в очереди: ${j.queue_position}. ` : "") + `Прошло ${j.elapsed_sec || 0} с.`;
-        poll(id);
-      } else if (j.status === "done") { $("barfill").style.width = "100%"; render(j); }
-      else fail(`Обработка не удалась: ${j.error || "неизвестная ошибка"}`);
-    } catch (e) { fail(`Ошибка отображения результата: ${e.message}`); }
-  }, 1500);
+async function save(rec) {
+  if (!checks.has(rec.id)) return;        // deleted while an async step was still running
+  try { await store.put(rec); announce({ type: "put", rec }); }
+  catch (e) { console.error(e); toast(`Не удалось сохранить историю: ${String((e && e.name) || e)}`); }
 }
 
-function fail(msg) { $("stage").innerHTML = `<span class="err">${esc(msg)}</span>`; $("go").disabled = !chosen; }
+function kind(r) {
+  if (r.status === "uploading" || r.status === "processing") return "run";
+  if (r.status === "failed") return "fail";
+  const v = r.result && r.result.verdict;
+  if (v === "violation") return "bad";
+  // only an explicit, complete "no_violation" is shown as clean; anything else must be reviewed by hand
+  return v === "no_violation" && !r.result.partial ? "ok" : "part";
+}
+function isTest(r) { return r.status === "done" && !!(r.result && r.result.dummy); }
+function summary(r) {
+  if (isTest(r)) return "тестовый режим, результат фиктивный";
+  switch (kind(r)) {
+    case "run": return r.status === "uploading" ? `Загрузка ${Math.round((r.progress || 0) * 100)}%` : "Анализ…";
+    case "fail": return "Не выполнена";
+    case "bad": {
+      const n = (r.result.violations || []).length;
+      return `${n} ${plural(n, "нарушение", "нарушения", "нарушений")}${r.result.partial ? ", неполная" : ""}`;
+    }
+    case "part": return "Проверка неполная";
+    default: return "Нарушений не найдено";
+  }
+}
+function group(ts) {
+  const d = new Date(); d.setHours(0, 0, 0, 0); const today = d.getTime();
+  return ts >= today ? "Сегодня" : ts >= today - 864e5 ? "Вчера" : ts >= today - 6 * 864e5 ? "Последние 7 дней" : "Ранее";
+}
 
-function render(j) {
-  $("status").hidden = true; $("go").disabled = false;
-  const v = j.violations || [];
-  // an incomplete analysis must never look like a clean "no violation"
-  const unsure = j.partial && j.verdict !== "violation";
-  let h = `<div class="card"><div class="verdict ${j.verdict === "violation" ? "bad" : unsure ? "part" : "ok"}">${
-    unsure ? "Проверка неполная — отсутствие нарушений не подтверждено" :
-    j.verdict === "violation" ? "Обнаружены признаки возможных нарушений" : "Нарушение не обнаружено"}</div>`;
+// ---- sidebar
+function renderList() {
+  const q = $("search").value.trim().toLowerCase();
+  const items = [...checks.values()].filter(r => !q || r.filename.toLowerCase().includes(q)).sort((a, b) => b.created - a.created);
+  let h = "", last = null;
+  for (const r of items) {
+    const g = group(r.created);
+    if (g !== last) { h += `<div class="group">${g}</div>`; last = g; }
+    let k = "fail", s = "Запись повреждена", test = false;   // one damaged record must not blank the whole list
+    try { k = kind(r); s = summary(r); test = isTest(r); } catch (e) { console.error(e); }
+    h += `<div class="item${r.id === current ? " active" : ""}" data-id="${esc(r.id)}">
+      <a href="#/c/${esc(r.id)}"${r.id === current ? ` aria-current="page"` : ""}><span class="dot ${test ? "test" : k}"></span>
+        <span class="txt"><span class="name" title="${esc(r.filename)}">${esc(r.filename)}</span>
+        <span class="sub">${esc(when(r.created))} · ${esc(s)}</span></span>
+        ${test ? `<span class="testtag" title="Результат тестового режима, без моделей">ТЕСТ</span>` : ""}
+        ${r.unseen ? `<span class="unseen" title="Новый результат"></span>` : ""}</a>
+      <button class="del" data-del="${esc(r.id)}" title="Удалить" aria-label="Удалить проверку ${esc(r.filename)}">×</button></div>`;
+  }
+  $("list").innerHTML = h || `<p class="empty">${q ? "Ничего не найдено" : "Здесь появятся ваши проверки"}</p>`;
+}
+function paintItem(r) {          // progress ticks: touch one line instead of rebuilding the list (keeps focus and hover)
+  const el = $("list").querySelector(`.item[data-id="${CSS.escape(r.id)}"] .sub`);
+  if (el) el.textContent = `${when(r.created)} · ${summary(r)}`;
+}
+$("list").addEventListener("click", e => {
+  const b = e.target.closest("[data-del]");
+  if (b) removeCheck(b.dataset.del);
+});
+$("search").addEventListener("input", renderList);
+
+async function updateUsage() {
+  if (!navigator.storage || !navigator.storage.estimate) return;
+  try { const { usage, quota } = await navigator.storage.estimate(); $("usage").textContent = `Занято: ${mb(usage)} из ${mb(quota)}`; }
+  catch { /* informational only */ }
+}
+
+// ---- routing: #/c/<id> shows a check, anything else the upload view
+function go(id) { location.hash = id ? `#/c/${id}` : "#/"; }
+function route() {
+  const m = location.hash.match(/^#\/c\/([\w-]+)$/);
+  closeDrawer();
+  if (!(m && checks.has(m[1]))) { showNew(); return; }
+  showCheck(m[1]).catch(e => { console.error(e); toast(`Не удалось показать проверку: ${e.message}`); });
+}
+addEventListener("hashchange", route);
+
+function showNew() {
+  current = null; stopVideo();
+  $("viewCheck").hidden = true; $("viewNew").hidden = false;
+  $("topTitle").textContent = "Новая проверка"; document.title = "Проверка кассовой дисциплины";
+  renderList();
+}
+
+async function showCheck(id) {
+  const rec = checks.get(id);
+  current = id;
+  $("viewNew").hidden = true; $("viewCheck").hidden = false;
+  if (rec.unseen) { rec.unseen = false; save(rec); }
+  renderList();
+  $("cTitle").textContent = rec.filename; $("topTitle").textContent = rec.filename;
+  document.title = `Проверка от ${when(rec.created)}`;   // not the file name: titles go to browser history and sync
+  $("cMeta").textContent = `${when(rec.created)} · ${mb(rec.size)}`;
+  $("main").scrollTop = 0;
+  paintCheck(rec);
+  await loadVideo(rec);
+}
+
+// ---- player
+const vid = $("vid");
+let loadToken = 0, pendingSeek = null;
+function stopVideo() {
+  loadToken++;                                // any loadVideo still awaiting its blob is now stale
+  if (pendingSeek) { vid.removeEventListener("loadedmetadata", pendingSeek); pendingSeek = null; }
+  vid.pause(); vid.removeAttribute("src"); vid.load();
+  if (videoUrl) URL.revokeObjectURL(videoUrl);
+  videoUrl = null;
+}
+async function loadVideo(rec) {
+  stopVideo();
+  const token = loadToken;
+  $("vidNote").textContent = "";
+  let blob = live.get(rec.id);
+  if (!blob && rec.video === "saved") {
+    try { blob = await store.getVideo(rec.id); } catch (e) { console.error(e); }
+  }
+  if (token !== loadToken || current !== rec.id) return;   // another check (or the same one again) was opened meanwhile
+  $("viewCheck").classList.toggle("novideo", !blob);
+  vid.hidden = $("track").hidden = !blob;
+  if (blob) { videoUrl = URL.createObjectURL(blob); vid.src = videoUrl; }
+  else $("vidNote").textContent = rec.videoNote || "Видео этой проверки не сохранено в браузере. Таймкоды и кадры-доказательства доступны ниже.";
+  renderTrack();
+}
+vid.addEventListener("error", () => {
+  if (videoUrl) $("vidNote").textContent = "Браузер не может воспроизвести этот видеоформат (например, HEVC в .mov). Таймкоды и кадры-доказательства доступны ниже.";
+});
+vid.addEventListener("loadedmetadata", renderTrack);
+vid.addEventListener("timeupdate", moveHead);
+
+function renderTrack() {
+  const rec = checks.get(current);
+  const dur = Number.isFinite(vid.duration) && vid.duration > 0 ? vid.duration : rec && rec.result && rec.result.video_duration_sec;
+  const vs = rec && rec.status === "done" ? rec.result.violations || [] : [];
+  $("track").innerHTML = `<div class="head" id="head"></div>` + (dur ? vs.map((x, i) =>
+    `<button class="mark" style="left:${Math.min(100, Math.max(0, x.timecode_sec / dur * 100))}%" data-t="${Number(x.timecode_sec)}" data-i="${i}"
+       title="${i + 1}. ${esc(x.type)} — ${mmss(x.timecode_sec)}" aria-label="Перейти к событию ${i + 1}: ${esc(x.type)}, ${mmss(x.timecode_sec)}"></button>`).join("") : "");
+  moveHead();
+}
+function moveHead() {
+  const h = $("head");
+  if (h) h.style.left = vid.duration > 0 ? `${vid.currentTime / vid.duration * 100}%` : "0";
+}
+$("track").addEventListener("click", e => {
+  if (e.target.closest("[data-t]") || !(vid.duration > 0)) return;
+  const r = $("track").getBoundingClientRect();
+  vid.currentTime = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * vid.duration;
+});
+
+function seek(t, i) {
+  if (!videoUrl || !Number.isFinite(t)) return;
+  const jump = () => { pendingSeek = null; vid.currentTime = Math.max(0, t); vid.pause(); };
+  if (pendingSeek) vid.removeEventListener("loadedmetadata", pendingSeek);
+  pendingSeek = null;
+  if (vid.readyState >= 1) jump();
+  else { pendingSeek = jump; vid.addEventListener("loadedmetadata", jump, { once: true }); }
+  const top = $("player").getBoundingClientRect().top;
+  if (top < 0 || top > innerHeight * 0.4) $("player").scrollIntoView({ behavior: "smooth", block: "start" });
+  const card = i != null && $(`viol${i}`);
+  if (card) { card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash"); setTimeout(() => card.classList.remove("flash"), 1600); }
+}
+
+// ---- check view
+function paintCheck(rec) { paintStatus(rec); paintResult(rec); renderTrack(); }
+
+function paintStatus(rec) {
+  const box = $("cStatus");
+  box.hidden = rec.status === "done";
+  if (rec.status === "done") return;
+  const failed = rec.status === "failed";
+  $("cErr").hidden = !failed; $("rerun").hidden = !(failed && canRerun(rec));
+  $("stage").hidden = $("bar").hidden = $("statnote").hidden = failed;
+  if (failed) { $("cErr").textContent = rec.error || "Обработка не удалась"; return; }
+  const up = rec.status === "uploading";
+  const p = up ? rec.progress || 0 : Math.max(0.05, rec.progress || 0);
+  $("stage").textContent = up ? `Загрузка файла… ${Math.round(p * 100)}%` : STAGES[rec.stage] || "Анализ видео";
+  $("barfill").style.width = `${p * 100}%`;
+  $("statnote").textContent = up ? "Не закрывайте вкладку, пока файл загружается." :
+    rec.offline ? "Нет связи с сервисом, повторяю запрос…" :
+    (rec.queue ? `Позиция в очереди: ${rec.queue}. ` : "") + `Прошло ${rec.elapsed || 0} с. Можно загрузить следующее видео — результат появится в истории.`;
+}
+
+function safeUrl(u) { return /^https?:\/\//i.test(String(u || "")) ? u : null; }
+
+function paintResult(rec) {
+  if (rec.status !== "done") { $("cResult").innerHTML = ""; return; }
+  const j = rec.result, v = j.violations || [], k = kind(rec);
+  let h = `<div class="card">${isTest(rec) ? `<div class="testbar inline" role="alert"><div>ТЕСТОВЫЙ РЕЖИМ — результат выдан без моделей (FORTE_DUMMY=1) и не отражает содержимое видео.</div></div>` : ""}<div class="verdict ${k}">${
+    k === "part" ? "Проверка неполная — отсутствие нарушений не подтверждено" :
+    k === "bad" ? "Обнаружены признаки возможных нарушений" : "Нарушение не обнаружено"}</div>`;
   if (j.partial) h += `<p class="note">Анализ выполнен не полностью (ограничение по времени или ошибка обработки) — часть проверок не выполнена, просмотрите видео вручную.</p>`;
-  if (j.verdict === "violation") h += `<p class="note">Найдено событий: ${v.length}. Проверьте каждое по кадрам и таймкоду.</p>`;
+  if (k === "bad") h += `<p class="note">Найдено событий: ${v.length}. Нажмите на таймкод, чтобы перемотать видео к событию.</p>`;
   h += `</div>`;
   v.forEach((x, i) => {
     const refs = (x.rule && x.rule.references) || [];
-    h += `<div class="card viol"><h3>${i + 1}. ${esc(x.type)}</h3>
-      <div class="meta">Таймкод: <b>${mmss(x.timecode_sec)}</b> (${x.timecode_sec} с)${x.confidence != null ? ` · уверенность: ${Math.round(x.confidence * 100)}%` : ""}</div>
-      <div>${esc(x.description.split(/ (Правило|Возможное нарушение требований|Косвенно связано с требованием|Нормативное основание)/)[0])}</div>
-      <div class="frames">${(x.evidence_frames || []).map(f => `<figure><img src="data:image/jpeg;base64,${f.image_base64}" alt="Кадр ${mmss(f.timestamp_sec)}"><figcaption>Кадр ${mmss(f.timestamp_sec)} (${f.timestamp_sec} с)</figcaption></figure>`).join("")}</div>
-      <div class="rule"><b>Правило и источник:</b> ${refs.length ? refs.map(r => `${esc(r.document)}, ${esc(r.clause)} — ${esc(r.summary)} <a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>`).join("<br>") : "нормативное основание не верифицировано"}
+    const t = Number(x.timecode_sec);
+    h += `<div class="card viol" id="viol${i}"><h3>${i + 1}. ${esc(x.type)}</h3>
+      <div class="meta">Таймкод: <button class="tc" data-t="${t}" data-i="${i}" title="Перемотать видео">▶ ${mmss(t)}</button> (${esc(t)} с)${x.confidence != null ? ` · уверенность: ${Math.round(x.confidence * 100)}%` : ""}</div>
+      <div>${esc(String(x.description || "").split(/ (Правило|Возможное нарушение требований|Косвенно связано с требованием|Нормативное основание)/)[0])}</div>
+      <div class="frames">${(x.evidence_frames || []).map(f => `<figure><img src="data:image/jpeg;base64,${esc(f.image_base64)}" alt="Кадр ${mmss(f.timestamp_sec)}">
+        <figcaption><button class="tc" data-t="${Number(f.timestamp_sec)}" data-i="${i}" title="Перемотать видео">▶ ${mmss(f.timestamp_sec)}</button> (${esc(f.timestamp_sec)} с)</figcaption></figure>`).join("")}</div>
+      <div class="rule"><b>Правило и источник:</b> ${refs.length ? refs.map(r => {
+        const u = safeUrl(r.url);
+        return `${esc(r.document)}, ${esc(r.clause)} — ${esc(r.summary)}${u ? ` <a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>` : ""}`;
+      }).join("<br>") : "нормативное основание не верифицировано"}
       ${x.rule && x.rule.grounding === "weak" ? `<br><span class="note">Основание косвенное или по толкованию.</span>` : ""}</div></div>`;
   });
-  $("result").innerHTML = h; $("result").hidden = false;
-  document.querySelectorAll(".frames img").forEach(img => img.onclick = () => { $("zoomimg").src = img.src; $("zoom").showModal(); });
+  $("cResult").innerHTML = h;
 }
+
+$("viewCheck").addEventListener("click", e => {
+  const b = e.target.closest("[data-t]");
+  if (b) { seek(Number(b.dataset.t), b.dataset.i); return; }
+  const img = e.target.closest(".frames img");
+  if (img) { $("zoomimg").src = img.src; $("zoom").showModal(); }
+});
 $("zoom").onclick = () => $("zoom").close();
+$("rerun").onclick = () => { const r = checks.get(current); if (r) rerun(r); };
+
+// ---- upload + polling
+function pick(f) { chosen = f || null; $("fname").textContent = f ? `${f.name} (${mb(f.size)})` : "Файл не выбран"; $("go").disabled = !f; }
+$("drop").onclick = () => $("file").click();
+$("drop").onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
+$("file").onchange = e => pick(e.target.files[0]);
+["dragover", "dragenter"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.remove("over"); }));
+$("drop").addEventListener("drop", e => pick(e.dataTransfer.files[0]));
+$("go").onclick = () => { if (!chosen) return; const f = chosen; pick(null); $("file").value = ""; startCheck(f); };
+
+async function startCheck(file) {
+  const rec = { id: uid(), filename: file.name || "video", size: file.size, created: Date.now(), status: "uploading", progress: 0,
+                video: "pending", beat: Date.now() };
+  live.set(rec.id, file);
+  checks.set(rec.id, rec);
+  await save(rec);
+  if (checks.get(rec.id) !== rec) return;    // deleted (or history cleared) while it was being saved
+  go(rec.id);
+  upload(rec, file);
+  keepVideo(rec, file);
+}
+
+async function keepVideo(rec, file) {
+  try {
+    await store.putVideo(rec.id, file);
+    rec.video = "saved";
+  } catch (e) {
+    console.error(e);
+    rec.video = "failed";
+    rec.videoNote = e && e.name === "QuotaExceededError"
+      ? "Не хватило места в браузере — видео не сохранено (удалите старые проверки). Таймкоды и кадры-доказательства доступны ниже."
+      : `Видео не удалось сохранить в браузере (${String((e && e.name) || e)}). Таймкоды и кадры-доказательства доступны ниже.`;
+  }
+  if (!checks.has(rec.id)) { store.remove(rec.id).catch(() => {}); return; }   // deleted while the copy was being written
+  await save(rec);
+  updateUsage();
+}
+
+function upload(rec, file) {
+  const fd = new FormData(); fd.append("file", file, rec.filename);
+  const x = new XMLHttpRequest();
+  uploads.set(rec.id, x);
+  x.open("POST", "/ui/analyze");
+  x.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    rec.progress = e.loaded / e.total;
+    if (Date.now() - (rec.beat || 0) > UPLOAD_BEAT_MS) { rec.beat = Date.now(); save(rec); }   // "this tab is still uploading"
+    paintItem(rec);
+    if (rec.id === current) paintStatus(rec);
+  };
+  x.onload = () => {
+    uploads.delete(rec.id);
+    let j = {};
+    try { j = JSON.parse(x.responseText) || {}; } catch { /* proxy error pages are not JSON */ }
+    if (x.status >= 200 && x.status < 300 && j.job_id) {
+      Object.assign(rec, { status: "processing", jobId: j.job_id, stage: "queued", progress: 0 });
+      save(rec); paintItem(rec);
+      if (rec.id === current) paintStatus(rec);
+      poll(rec.id);
+    } else {
+      const busy = x.status === 429 ? " Подождите минуту и нажмите «Проверить заново»." : "";
+      finish(rec, "failed", null, `Не удалось загрузить файл: ${j.detail || x.statusText || `HTTP ${x.status}`}.${busy}`);
+    }
+  };
+  x.onerror = () => { uploads.delete(rec.id); finish(rec, "failed", null, "Не удалось загрузить файл: ошибка сети."); };
+  x.onabort = () => uploads.delete(rec.id);
+  x.send(fd);
+}
+
+// Only the service's own "job not found" proves a job is gone: network errors, proxy/tunnel error pages
+// and 5xx are retried with backoff for as long as the page is open (the result stays on the server for 6 h).
+function poll(id, misses = 0) {
+  clearTimeout(pollers.get(id));
+  if (!checks.has(id)) { pollers.delete(id); return; }
+  pollers.set(id, setTimeout(async () => {
+    const rec = checks.get(id);
+    if (!rec || rec.status !== "processing") { pollers.delete(id); return; }
+    let r = null, j = null;
+    try {
+      r = await fetch(`/ui/jobs/${encodeURIComponent(rec.jobId)}`);
+      j = await r.json().catch(() => null);
+    } catch (e) { r = null; }
+    if (checks.get(id) !== rec || rec.status !== "processing") return;
+    try {
+      if (r && r.status === 404 && j && j.detail === "job not found") {
+        finish(rec, "failed", null, "Сервис больше не хранит эту задачу (прошло более 6 часов или сервис перезапускался). Запустите проверку заново.");
+      } else if (!r || !r.ok || !j || typeof j !== "object") {
+        rec.offline = true;
+        poll(id, misses + 1);
+      } else if (j.status === "processing") {
+        Object.assign(rec, { offline: false, stage: j.stage, progress: j.progress || 0, queue: j.queue_position, elapsed: j.elapsed_sec });
+        poll(id);
+      } else if (j.status === "done") {
+        if (j.verdict === "violation" || j.verdict === "no_violation") finish(rec, "done", j);
+        else finish(rec, "failed", null, "Сервис вернул результат без вердикта — просмотрите видео вручную или запустите проверку заново.");
+        return;
+      } else {
+        finish(rec, "failed", null, `Обработка не удалась: ${j.error || "неизвестная ошибка"}`);
+        return;
+      }
+      if (rec.id === current) paintStatus(rec);
+    } catch (e) {               // a rendering error must not end the polling chain
+      console.error(e);
+      if (rec.status === "processing") poll(id, misses + 1);   // poll() replaces any timer already set
+    }
+  }, misses ? Math.min(30000, 3000 * misses) : 1500));
+}
+
+function finish(rec, status, result, error) {
+  clearTimeout(pollers.get(rec.id)); pollers.delete(rec.id);
+  if (!checks.has(rec.id)) return;
+  Object.assign(rec, { status, result: result || null, error: error || null, finished: Date.now(), offline: false });
+  if (rec.id !== current) rec.unseen = true;
+  save(rec); renderList();
+  if (rec.id === current) paintCheck(rec);
+}
+
+function canRerun(rec) { return live.has(rec.id) || rec.video === "saved"; }
+async function rerun(rec) {
+  if (rec.status !== "failed") return;       // double click: the first one already started the upload
+  const before = { status: rec.status, error: rec.error };
+  Object.assign(rec, { status: "uploading", progress: 0, error: null, result: null, jobId: null, unseen: false, beat: Date.now() });
+  renderList();
+  if (rec.id === current) paintCheck(rec);
+  let file = live.get(rec.id);
+  if (!file) { try { file = await store.getVideo(rec.id); } catch (e) { console.error(e); } }
+  if (checks.get(rec.id) !== rec) return;    // deleted while the video was being read
+  if (!file) {
+    Object.assign(rec, before);
+    renderList();
+    if (rec.id === current) paintCheck(rec);
+    toast("Видео этой проверки не сохранено — загрузите файл заново.");
+    return;
+  }
+  save(rec);
+  upload(rec, file);
+}
+
+function forget(id) {           // drop a check from this tab (stops its upload and polling)
+  const x = uploads.get(id); if (x) x.abort();
+  clearTimeout(pollers.get(id)); pollers.delete(id);
+  live.delete(id); checks.delete(id);
+}
+
+// best effort: the service would drop the result (evidence frames) after 6 h anyway
+function dropJob(rec) {
+  if (rec && rec.jobId) fetch(`/ui/jobs/${encodeURIComponent(rec.jobId)}`, { method: "DELETE", keepalive: true }).catch(() => {});
+}
+
+async function removeCheck(id) {
+  const rec = checks.get(id);
+  if (!rec || !confirm(`Удалить проверку «${rec.filename}» вместе с сохранённым видео?`)) return;
+  dropJob(rec);
+  forget(id);
+  try { await store.remove(id); announce({ type: "del", id }); }
+  catch (e) { console.error(e); toast("Не удалось удалить из хранилища браузера."); }
+  if (current === id) go(null); else renderList();
+  updateUsage();
+}
+
+$("clearAll").onclick = async () => {
+  if (!checks.size || !confirm("Удалить всю историю проверок и сохранённые видео из этого браузера?")) return;
+  checks.forEach(dropJob);
+  [...checks.keys()].forEach(forget);
+  try { await store.clear(); announce({ type: "clear" }); }
+  catch (e) { console.error(e); toast("Не удалось очистить хранилище браузера."); }
+  go(null); route(); updateUsage();
+};
+
+if (bc) bc.onmessage = ({ data }) => {
+  if (!data || typeof data !== "object") return;
+  if (data.type === "put" && data.rec && data.rec.id) {
+    const id = data.rec.id;
+    if (uploads.has(id)) return;             // this tab owns the upload: its own state is the newest
+    const mine = checks.get(id);
+    if (mine) Object.assign(mine, data.rec); else checks.set(id, data.rec);   // keep object identity for in-flight steps
+    const rec = checks.get(id);
+    if (rec.status === "processing" && rec.jobId && !pollers.has(id)) poll(id);
+    renderList();
+    if (current === id) paintCheck(rec);
+  } else if (data.type === "del" && checks.has(data.id)) {
+    forget(data.id);
+    if (current === data.id) go(null); else renderList();
+  } else if (data.type === "clear") {
+    [...checks.keys()].forEach(forget);
+    go(null); route();
+  }
+  updateUsage();
+};
+
+// ---- drawer (phone)
+function closeDrawer() { $("side").classList.remove("open"); $("scrim").classList.remove("open"); }
+$("menu").onclick = () => { $("side").classList.add("open"); $("scrim").classList.add("open"); };
+$("scrim").onclick = closeDrawer;
+addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+$("newBtn").onclick = () => { if (location.hash === "#/" || !location.hash) route(); else go(null); };
+
+addEventListener("beforeunload", e => { if (uploads.size) { e.preventDefault(); e.returnValue = ""; } });
+
+// the service itself runs without models: say so on every screen, not only on finished results
+fetch("/health").then(r => r.json()).then(h => {
+  if (!h || h.dummy !== true) return;
+  $("testBar").hidden = false;
+}).catch(() => { /* health is informational here */ });
+
+(async function init() {
+  await store.open();
+  let saved = [], videoIds = [];
+  try { saved = await store.list(); videoIds = await store.videoIds(); }
+  catch (e) { console.error(e); toast("Не удалось прочитать историю проверок."); }
+  const withVideo = new Set(videoIds);
+  for (const r of saved) {
+    checks.set(r.id, r);
+    let dirty = false;
+    // the tab was closed between writing the video and recording that it was written
+    if (r.video === "pending") { r.video = withVideo.has(r.id) ? "saved" : "failed"; dirty = true; }
+    // no heartbeat from the uploading tab: it was closed mid-upload and the server never got the file
+    if (r.status === "uploading" && Date.now() - (r.beat || 0) > UPLOAD_STALE_MS) {
+      Object.assign(r, { status: "failed", error: "Загрузка прервалась: вкладка была закрыта или перезагружена. Запустите проверку заново." });
+      dirty = true;
+    } else if (r.status === "processing" && r.jobId) poll(r.id);
+    if (dirty) save(r);
+  }
+  // videos whose check record was never written or already removed
+  for (const id of withVideo) if (!checks.has(id)) store.remove(id).catch(() => {});
+  if (!store.persistent) $("storeNote").textContent = "Браузер не дал доступ к хранилищу: история пропадёт после закрытия вкладки.";
+  updateUsage();
+  route();
+})();
 </script>
 </body>
 </html>
