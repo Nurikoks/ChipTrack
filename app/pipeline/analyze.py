@@ -117,7 +117,7 @@ class Analyzer:
         self.vlm.calls, self.vlm.nan, self.trace, self.warnings = 0, 0, [], []
 
         job.stage, job.progress = "decoding", 0.05
-        clip = video.sample(path, config.SAMPLE_FPS)
+        clip = video.sample(path, config.SAMPLE_FPS, deadline=budget.deadline - 60)  # leave time for checks
         self.warnings += clip.warnings
 
         job.stage, job.progress = "perception", 0.15

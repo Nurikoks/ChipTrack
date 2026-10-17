@@ -1,5 +1,6 @@
 """Video decoding / sampling / evidence-frame encoding."""
 import base64
+import time
 from dataclasses import dataclass, field
 
 import cv2
@@ -8,6 +9,9 @@ import numpy as np
 
 class VideoError(ValueError):
     pass
+
+
+MAX_PIXELS = 4096 * 2304          # beyond 4K a single decoded frame costs tens of MB
 
 
 @dataclass
@@ -32,17 +36,24 @@ def probe(path) -> tuple[float, int, float, int, int]:
     cap.release()
     if not ok or fps <= 0 or w == 0:
         raise VideoError("в файле нет декодируемых видеокадров")
+    if w * h > MAX_PIXELS:
+        raise VideoError(f"слишком большое разрешение видео ({w}×{h}); поддерживается до 4K")
     return fps, n, (n / fps if n > 0 else 0.0), w, h
 
 
-def sample(path, target_fps: float = 2.0, max_frames: int = 1200, max_side: int = 960) -> Clip:
-    """Sequential decode keeping every k-th frame. Large videos are downscaled to max_side."""
+def sample(path, target_fps: float = 2.0, max_frames: int = 1200, max_side: int = 960,
+           deadline: float | None = None) -> Clip:
+    """Sequential decode keeping every k-th frame. Large videos are downscaled to max_side.
+    Stops at `deadline` (wall clock) so a pathological file cannot hold the single GPU worker."""
     fps, n, dur, w, h = probe(path)
     step = max(1, round(fps / target_fps))
     scale = min(1.0, max_side / max(w, h))
     cap = cv2.VideoCapture(str(path))
-    times, frames, i, bad = [], [], 0, 0
+    times, frames, i, bad, late = [], [], 0, 0, False
     while len(frames) < max_frames:
+        if deadline is not None and frames and i % 64 == 0 and time.time() > deadline:
+            late = True
+            break
         if not cap.grab():
             break
         if i % step == 0:
@@ -62,7 +73,7 @@ def sample(path, target_fps: float = 2.0, max_frames: int = 1200, max_side: int 
     warnings = []
     if len(frames) >= max_frames:
         warnings.append("frames_capped")
-    elif (n > 0 and i < 0.9 * n) or bad > 0.1 * (len(frames) + bad):
+    elif late or (n > 0 and i < 0.9 * n) or bad > 0.1 * (len(frames) + bad):
         warnings.append("decode_truncated")
     dur = max(dur, times[-1])
     return Clip(times, frames, fps, dur, frames[0].shape[1], frames[0].shape[0], warnings)

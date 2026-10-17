@@ -1,8 +1,10 @@
 """Jury-style API test: concurrent uploads via curl, polling, exact schema validation, error cases.
 
 Usage: python api_test.py <base_url> <api_key> <video> [<video> ...]
+Set API_TEST_MAX_MB if the service runs with a FORTE_MAX_UPLOAD_MB other than 300.
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -68,6 +70,15 @@ print("--- error cases")
 tmp = Path(tempfile.gettempdir())
 (tmp / "broken.mov").write_bytes(b"\x00\x00\x00 ftypqt  definitely not a full movie")
 (tmp / "notes.txt").write_text("hello")
+(tmp / "fake.mp4").write_text("not a video, just text with a video extension")
+max_mb = int(os.environ.get("API_TEST_MAX_MB", "300"))     # the service's FORTE_MAX_UPLOAD_MB
+with open(tmp / "huge.mp4", "wb") as f:
+    f.write(b"\x00\x00\x00\x18ftypmp42")
+    f.truncate((max_mb + 5) * 2**20)
+print("health        ->", curl(f"{base}/health")[0])
+print("fake .mp4     ->", curl("-X", "POST", f"{base}/api/v1/analyze", "-H", f"X-API-Key: {key}", "-F", f"file=@{tmp / 'fake.mp4'}"))
+print(f"{max_mb + 5} MB file   ->", curl("-X", "POST", f"{base}/api/v1/analyze", "-H", f"X-API-Key: {key}", "-F", f"file=@{tmp / 'huge.mp4'}"))
+(tmp / "huge.mp4").unlink()
 print("no key        ->", curl("-X", "POST", f"{base}/api/v1/analyze", "-F", f"file=@{videos[0]}")[0])
 print("wrong key     ->", curl("-X", "POST", f"{base}/api/v1/analyze", "-H", "X-API-Key: wrong", "-F", f"file=@{videos[0]}")[0])
 print("wrong key GET ->", curl(f"{base}/api/v1/jobs/abc", "-H", "X-API-Key: wrong")[0])
@@ -77,7 +88,19 @@ print("broken .mov   ->", run(str(tmp / "broken.mov"))[1])
 
 print(f"--- {len(videos)} concurrent uploads")
 t0 = time.time()
+api_ids = []
 with ThreadPoolExecutor(len(videos)) as ex:
     for video, status, j, dt in ex.map(run, videos):
-        print(f"{Path(video).name:12s} {dt:6.1f}s  {status}")
+        print(f"{Path(video).name:12s} {dt:6.1f}s  {status}{'  PARTIAL ' + str(j.get('warnings')) if j and j.get('partial') else ''}")
+        if j:
+            api_ids.append(j["job_id"])
 print(f"all done in {time.time() - t0:.1f}s")
+
+print("--- reviewer UI (no key)")
+if api_ids:
+    print("jury job via /ui/jobs ->", curl(f"{base}/ui/jobs/{api_ids[0]}")[0], "(expected 404)")
+codes = []
+for _ in range(4):        # the 4th unauthenticated upload must be refused while 3 are pending
+    code, body = curl("-X", "POST", f"{base}/ui/analyze", "-F", f"file=@{videos[0]}")
+    codes.append(code)
+print("4 UI uploads ->", codes, "(expected 200, 200, 200, 429)")

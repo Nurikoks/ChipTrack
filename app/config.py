@@ -4,10 +4,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-API_KEY = os.environ.get("FORTE_API_KEY", "")
+# stripped: `set FORTE_API_KEY=abc && ...` on Windows keeps the trailing space
+API_KEY = os.environ.get("FORTE_API_KEY", "").strip()
 WORK_DIR = Path(os.environ.get("FORTE_WORK_DIR", ROOT / "runtime"))
 MAX_UPLOAD_MB = int(os.environ.get("FORTE_MAX_UPLOAD_MB", "300"))
-# Hard wall-clock limit per job, counted from upload (jury limit is 5 min).
+# Hard wall-clock limit per job, counted from the start of the upload request (jury limit is 5 min).
 JOB_DEADLINE_SEC = float(os.environ.get("FORTE_JOB_DEADLINE_SEC", "270"))
 # Finished job results are kept in memory this long, then dropped (no video is ever kept).
 RESULT_TTL_SEC = float(os.environ.get("FORTE_RESULT_TTL_HOURS", "6")) * 3600

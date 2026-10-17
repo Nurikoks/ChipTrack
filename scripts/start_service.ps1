@@ -1,10 +1,10 @@
 # Production launcher (Windows, native venv).
-#   powershell -ExecutionPolicy Bypass -File scripts/start_service.ps1 [-Port 8000] [-Tunnel]
+#   powershell -ExecutionPolicy Bypass -File scripts/start_service.ps1 [-Port 8000] [-Tunnel] [-BindHost 127.0.0.1]
 # - generates a random API key once (runtime/api_key.txt) and prints it
 # - runs fully offline (HF_HUB_OFFLINE=1): weights must be downloaded first (scripts/download_weights.py)
 # - -Tunnel additionally starts a Cloudflare quick tunnel (public https URL) to the local port;
 #   it only forwards HTTP traffic, all video processing stays on this machine.
-param([int]$Port = 8000, [switch]$Tunnel)
+param([int]$Port = 8000, [switch]$Tunnel, [string]$BindHost = "127.0.0.1")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -35,4 +35,5 @@ if ($Tunnel) {
         -RedirectStandardError "$root\runtime\tunnel.log" -NoNewWindow
     Write-Host "Tunnel starting; public URL will appear in runtime\tunnel.log (https://*.trycloudflare.com)"
 }
-& $py -m uvicorn app.main:app --host 0.0.0.0 --port $Port --workers 1
+# localhost only: the tunnel connects locally; -BindHost 0.0.0.0 exposes the service to the whole LAN
+& $py -m uvicorn app.main:app --host $BindHost --port $Port --workers 1
