@@ -1,0 +1,34 @@
+# --- secrets (never commit) ---
+SECRETS.md
+runtime/
+*.key
+.env
+.env.*
+ngrok.yml
+
+# --- hackathon data: training videos, labels and frames must not be published ---
+videos/
+*.mov
+*.mp4
+*.avi
+*.mkv
+*.xlsx
+docs/taxonomy_frames/
+
+# --- model weights / caches / local tooling ---
+models/
+hf/
+*.safetensors
+*.onnx
+__pycache__/
+*.pyc
+.venv/
+venv/
+.claude/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

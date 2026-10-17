@@ -1,0 +1,15 @@
+services:
+  forte:
+    build: .
+    image: forte-cashdesk:0.1
+    ports: ["8000:8000"]
+    environment:
+      FORTE_API_KEY: ${FORTE_API_KEY:?set FORTE_API_KEY}
+      FORTE_VLM: ${FORTE_VLM:-Qwen/Qwen3-VL-2B-Instruct}
+    volumes:
+      - ${MODELS_DIR:-./models}:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    restart: unless-stopped
