@@ -105,18 +105,18 @@ Names are in Russian because they go into the API `type` field and the UI.
 ### Generic path «Визуальная аномалия относительно штатной процедуры» (VISUAL_ANOMALY)
 This is reserved for unseen types in the test (FAQ #9). It will be reported only with a strictly factual description and the rule field marked "not verified". The verdict policy for this path is Phase 3.
 
-## 4. Unresolved: needs human review (4 events)
+## 4. Unresolved: needs human review (3 events)
 
 I could not find a visible element that separates these clips from normal ones. I won't guess.
+X-1 @22 was resolved by the team as T12 (see §3) and is no longer listed here.
 
 | Clip @ label | What is visible | Closest normal clip | Question for the team |
 |---|---|---|---|
-| **X-1 @22** | Cashier takes notes from the counting machine (19.5 s), hand-counts them at chest height (20.5–22 s), gives them to the client (22.5–23 s) | X-3 (cash handed to client) | What is wrong at 22 s? E.g. notes taken before the machine finished, recount hidden from the client or camera, or a note held back? |
 | **X-2 @10** | Client puts a blue item (banknotes or an ID?) on the desk (9 s); cashier picks it up (10.5 s), handles it (11–13.5 s), loads the machine (14 s) | X-3, X-37 | Is the item cash or a document? What is the violation? |
 | **X-44 @16** | Cashier alone takes notes from the counter (12–13.5 s) and hand-counts them (14–20 s) | X-43, X-45 (almost identical) | What separates X-44 from X-43/X-45? |
 | **X-47 @68** | Second client's operation while the first client's stack is still on the desk (64–70 s) | X-5 | Is it T05 continuing, or "cash of two clients mixed"? |
 
-Please watch these four clips at normal speed (motion is easier to read than stills) and tell me what you see. If they turn out to be 1–2 new types, I'll add them to the list.
+Please watch these three clips at normal speed (motion is easier to read than stills) and tell me what you see. If they turn out to be 1–2 new types, I'll add them to the list.
 
 ## 5. Implications for the architecture (preview, not decided)
 

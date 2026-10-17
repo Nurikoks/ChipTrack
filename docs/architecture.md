@@ -5,7 +5,7 @@
 | Constraint | Consequence |
 |---|---|
 | Single laptop GPU: RTX 3050 **4 GB VRAM**, 16 GB RAM | One small detector plus **one** ≤4B VLM in 4-bit. No ensembles, no 7B models |
-| ≤ 5 min per video, from upload, for any clip ≤ 145 s; the jury may upload several at once | One GPU worker, so jobs run one at a time. Target is **≤ 60 s per clip** so a queue of 4–5 still meets the limit. Each job carries a deadline (upload + 240 s) and the pipeline drops low-priority checks when time runs out (`partial: true`) |
+| ≤ 5 min per video, from upload, for any clip ≤ 145 s; the jury may upload several at once | One GPU worker, so jobs run one at a time. Target is **≤ 60 s per clip** so a queue of 4–5 still meets the limit. Each job carries a deadline of 270 s counted from the start of the upload request (`FORTE_JOB_DEADLINE_SEC`); decoding stops at the deadline, and the pipeline drops low-priority checks when time runs out (`partial: true`) |
 | Fully local; offline after the weights download | Hugging Face weights are cached in `HF_HOME`, production runs with `HF_HUB_OFFLINE=1`, and no network calls happen at inference |
 | Only permissive licenses | Ultralytics YOLO (AGPL-3.0) and Qwen2.5-VL-3B (Qwen research license) are rejected; see §4 |
 | Tiny labelled set: 21 positive clips over 11 types (1–3 each), and the test uses **a different camera angle** | No end-to-end training. Each type is a **trigger** (a relation between people and scene objects over time) plus a **constrained yes/no visual check** on a targeted crop. Scene objects are located per video, never from fixed pixel zones |
@@ -62,7 +62,7 @@ Entries and exits come from two sources merged: room tracks that start/end at th
 
 **Timecode convention** (agreed in the taxonomy): for state or omission types, the moment the worker walks away from the workplace or the person enters. For action types, the frame of the action.
 
-## 3. Measured on this machine (RTX 3050 Laptop 4 GB, i5-12450H)
+## 3. Measured on the RTX 3050 Laptop 4 GB (i5-12450H, production target)
 
 | Component | Measurement |
 |---|---|
@@ -72,6 +72,7 @@ Entries and exits come from two sources merged: room tracks that start/end at th
 | Qwen3-VL-2B nf4: single-object grounding | ~3 s/object |
 | RTMPose-m (ONNX, CPU) | 21 ms/person (not used, see §5) |
 | End-to-end (first 8 clips, MVP) | 22–53 s per clip |
+| End-to-end, all 40 clips (v7) | 26.8 s mean, 68.7 s max per clip. v8 and v8b (25.8 s and 26.1 s mean) were measured on an RTX 4060 8 GB and are not comparable with this row |
 
 ### VLM capability probe (44 frames with known answers; `tools/probe_vlm*.py`)
 
@@ -138,7 +139,7 @@ The 4B model (nf4, 0.47 s/question) separates screens and safes even better, but
 | T06 extra person | Depends on reliable entry detection; people walking behind the glass next to the door are filtered only by duration (≥ 5 s) | X-18 |
 | Small cash stacks | Tiling helps (X-4, X-46), but a small blue stack on a busy desk is still missed | X-38 |
 | Person count | People outside the glass wall are removed by the "track reaches the room" rule; in layouts where the glass line meets the desk edge, some remain | X-4, X-34 |
-| Unresolved training events | X-1, X-2, X-44 (and X-47's second event) have no identified visible cue; reported as missed or found only through other types | — |
+| Unresolved training events | X-2 and X-44 (UNRESOLVED), and X-47's second event (labelled T05, low confidence), have no clearly identified visible cue; X-2 is flagged only through T06/T12 hits, which do not match its label. X-1 is now labelled T12 (team-confirmed) | — |
 | Dark scenes | Lights switched off: laptop screens and safe states are less reliable | X-11, X-12 |
 | Timecodes | Departure timecodes follow the "moment of leaving" convention, but the occupancy scan has a 2 s period, giving ±2 s jitter | — |
 | Interpretation | Every finding is a *possible* violation based on what is visible. Anything requiring ledgers, documents' content or intent is out of scope by design | — |
@@ -146,4 +147,4 @@ The 4B model (nf4, 0.47 s/question) separates screens and safes even better, but
 ## 8. Verdict policy
 
 * `violation` if at least one finding passes its threshold. **Recall comes first:** a false alarm costs the reviewer a glance, a missed violation is never seen. Thresholds and gates are not tightened to remove a false positive when that risks dropping a true hit.
-* The `no_violation` verdict carries no hedge flag. A partial analysis (deadline hit) still reports everything found so far and sets `partial: true`.
+* A partial analysis (deadline hit, failed or skipped check, truncated decode, missing desk anchor, no persons, non-finite model output) still reports everything found so far, sets `partial: true` and lists the causes in `warnings`. A `no_violation` verdict with `partial: true` means "not confirmed", not "no violation".
