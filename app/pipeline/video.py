@@ -12,6 +12,9 @@ class VideoError(ValueError):
 
 
 MAX_PIXELS = 4096 * 2304          # beyond 4K a single decoded frame costs tens of MB
+# grey 64x64 JPEG for a finding whose frames could not be encoded (the API requires 1-3 frames);
+# built at import, so a broken JPEG encoder stops startup instead of the first report
+PLACEHOLDER_B64 = base64.b64encode(cv2.imencode(".jpg", np.full((64, 64, 3), 128, np.uint8))[1].tobytes()).decode("ascii")
 
 
 @dataclass

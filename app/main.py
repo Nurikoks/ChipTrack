@@ -50,9 +50,11 @@ STARTED = time.time()
 UPLOAD_PATHS = ("/api/v1/analyze", "/ui/analyze")
 UI_MAX_PENDING = 3                    # unauthenticated uploads waiting or running at once
 _ui_uploading = 0                     # /ui/analyze requests whose upload is still being received
+DRAIN_LIMIT = 50 * 2**20              # bytes of a refused request body read before closing
 
 # container signatures: the extension alone lets any file reach FFmpeg's demuxers
-_ISO_BMFF = (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip")   # .mov/.mp4/.m4v
+# .mov/.mp4/.m4v: any top-level atom QuickTime/MP4 writers put first (pnot/PICT: legacy QuickTime previews)
+_ISO_BMFF = (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip", b"pnot", b"PICT", b"uuid", b"junk")
 
 
 def _looks_like_video(head: bytes, ext: str) -> bool:
@@ -67,10 +69,15 @@ def _looks_like_video(head: bytes, ext: str) -> bool:
 
 async def _reject(request: Request, status: int, detail: str) -> JSONResponse:
     """The request body is drained first: some reverse proxies (ngrok with Expect: 100-continue)
-    otherwise rewrite an early error response into 200."""
-    async for _ in request.stream():
-        pass
-    return JSONResponse(status_code=status, content={"detail": detail})
+    otherwise rewrite an early error response into 200. Draining stops at DRAIN_LIMIT, and the
+    connection is then closed, so a refused multi-GB upload does not hold the tunnel for minutes."""
+    drained = 0
+    async for chunk in request.stream():
+        drained += len(chunk)
+        if drained > DRAIN_LIMIT:
+            break
+    headers = {"Connection": "close"} if drained > DRAIN_LIMIT else None
+    return JSONResponse(status_code=status, content={"detail": detail}, headers=headers)
 
 
 @app.middleware("http")

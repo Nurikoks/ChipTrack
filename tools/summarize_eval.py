@@ -24,7 +24,7 @@ out = [f"### {title}", "", f"Clips: {len(rows)} (violation {tp + fn}, no violati
        f"Accuracy {(tp + tn) / max(1, len(rows)):.2f}", ""]
 
 errs, type_hit, n_ev, per_type = [], 0, 0, defaultdict(Counter)
-for r in rows:
+for r in ok_rows:   # a crashed clip is listed under Failures, not counted as a missed event
     for e in r["events"]:
         n_ev += 1
         per_type[e["type"]]["events"] += 1

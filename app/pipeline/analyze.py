@@ -480,12 +480,11 @@ class Analyzer:
                     out.append(Finding("T04_KEY_LEFT_IN_SAFE", t_leave, pk * 0.8,
                                        "На видео работник отходит от рабочего места; в замке сейфа виден ключ",
                                        [(leave_idx, None), (iv, scene["safe"])]))
-        return out
 
     def _check_changeover(self, clip, people, scene, tl, budget, out):
         """Someone left, then a new person enters while cash lies openly on the desk."""
         if "desk" not in scene:
-            return out
+            return
         exits = [i for i, _, _ in self._count_events(tl, up=False)]
         for i, before, after in self._count_events(tl, up=True):
             if not budget.ok(4) or after < 2:
@@ -505,7 +504,6 @@ class Analyzer:
                                    "На видео после ухода предыдущего посетителя на столе открыто лежат банкноты, "
                                    "в это время в помещение входит и подходит к столу другой человек",
                                    [(i, None), (j, scene["desk"])]))
-        return out
 
     def _check_entries(self, clip, people, scene, tl, budget, out):
         """Entries: collector without document (T09), extra person beside the worker (T06), door left open (T07)."""
@@ -581,7 +579,6 @@ class Analyzer:
                                                "выглядит открытой",
                                                [(self._idx(clip, i + left), None),
                                                 (self._idx(clip, i + left + 4), door)]))
-        return out
 
     def _check_exits(self, clip, people, scene, tl, budget, out):
         """A visitor leaves while the worker keeps handling cash (counting not in the client's presence)."""
@@ -600,7 +597,6 @@ class Analyzer:
                                    "На видео посетитель уходит от стола, после чего работник продолжает "
                                    "пересчитывать наличные / загружать их в счётную машину",
                                    [(self._idx(clip, i - 1), None), (k, None)]))
-        return out
 
     def _check_periodic(self, clip, people, scene, tl, budget, out):
         """Sparse scan: personal items, drinking, safe open while nobody is at the safe."""
@@ -653,14 +649,13 @@ class Analyzer:
                 out.append(Finding("T03_SAFE_LEFT_OPEN", clip.times[i1], min(p1, p2),
                                    f"На видео дверца сейфа остаётся открытой не менее {dur:.0f} с, при этом у сейфа "
                                    f"никого нет", [(i1, scene["safe"]), (last_open, scene["safe"])]))
-        return out
 
     def _check_handover(self, clip, people, scene, tl, budget, out):
         """Banknotes passed across the desk between the worker and a visitor (T12), scanned every ~1 s
         while at least two people are in the room. Timecode = last frame of a run (the moment the money
         changes hands). Recall first: on the training clips this also fires on ordinary client service."""
         if "desk" not in scene:
-            return out
+            return
         step = max(1, int(round(config.SAMPLE_FPS)))
         hits = []
         for i in range(0, len(clip.frames), step):
@@ -683,7 +678,6 @@ class Analyzer:
             out.append(Finding("T12_CASH_HANDOVER_AT_DESK", clip.times[last], max(p for _, p in run),
                                "На видео у рабочего стола происходит передача банкнот между работником и "
                                "посетителем", [(peak, scene["desk"]), (last, None)]))
-        return out
 
     # ------------------------------------------------------------- aggregate
     def _report(self, clip, f: Finding) -> dict:
@@ -701,6 +695,8 @@ class Analyzer:
                                "image_base64": video.to_b64_jpeg(clip.frames[video.nearest_index(clip.times, f.t)])})
             except Exception:
                 log.exception("fallback frame for %s failed", f.type_id)
+                frames.append({"timestamp_sec": round(f.t, 1), "image_base64": video.PLACEHOLDER_B64})
+                self.warnings.append(f"report_degraded:{f.type_id}")
         try:
             v = build_violation(f.type_id, f.t, f.observed, frames, f.conf)
         except Exception:
