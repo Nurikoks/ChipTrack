@@ -76,7 +76,17 @@ class VLM:
     @torch.inference_mode()
     def p_yes(self, img: Image.Image, question: str) -> float:
         self.calls += 1
-        lg = self.model(**self._inputs(img, question + " Answer with one word: yes or no.")).logits[0, -1].float()
+        lg = self.model(**self._inputs(img, question + " Answer with one word: yes or no."), logits_to_keep=1).logits[0, -1].float()
+        return torch.sigmoid(torch.logsumexp(lg[self.yes], 0) - torch.logsumexp(lg[self.no], 0)).item()
+
+    @torch.inference_mode()
+    def p_sequence(self, images, question):
+        content = [{"type": "image", "image": img} for img in images]
+        content += [{"type": "text", "text": "Frames are ordered in time, earliest first. " + question + " Answer with one word: yes or no."}]
+        inp = self.proc.apply_chat_template([{"role": "user", "content": content}], tokenize=True,
+            add_generation_prompt=True, return_dict=True, return_tensors="pt").to(self.model.device)
+        self.calls += 1
+        lg = self.model(**inp, logits_to_keep=1).logits[0, -1].float()
         return torch.sigmoid(torch.logsumexp(lg[self.yes], 0) - torch.logsumexp(lg[self.no], 0)).item()
 
     @torch.inference_mode()

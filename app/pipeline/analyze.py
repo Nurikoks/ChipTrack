@@ -16,6 +16,7 @@ from .. import config
 from . import video
 from .models import VLM, Detector, crop
 from .rules import build_violation
+from ..telemetry import emit
 
 log = logging.getLogger("forte.analyze")
 
@@ -30,10 +31,11 @@ Q = {
     "lid_open": "This is a close-up of a laptop. Is the laptop lid open so that its screen is visible?",
     "lock_screen": "This is a close-up of a laptop. Is its screen showing a lock screen, a photo wallpaper or a black screen?",
     "safe_open": "This is a close-up of a small metal safe. Is the safe door open?",
-    "key": "This is a close-up of a small metal safe. Is a key sticking out of its keyhole (key inserted in the lock)?",
+    "key": "This is a close-up of a safe. Is a metal KEY inserted into the lock, with its shaft or bow projecting from the door? A dark empty keyhole alone is NOT a key.",
     "personal": "Is there a coat, a jacket or a woman's handbag (personal belongings, not a green cash bag) lying on the desk?",
     "drinking": "Is the person at the desk drinking from a cup right now?",
     "cup_in_hand": "Is the person holding a cup, a mug or a glass in their hand (not paper or banknotes)?",
+    "banknotes_in_hand": "Is the cashier holding paper banknotes in her hands?",
     "door_open": "This is a close-up of a glass door. Is the door standing open (not closed)?",
     "carry_bag": "Is a person carrying a green fabric cash-collection bag?",
     "doc_handover": "Is someone holding out a small sheet of paper or an ID card toward another person (not a bag)?",
@@ -42,7 +44,7 @@ Q = {
     "extra_person": "Is there a standing person right next to the seated worker, on the same side of the desk as the worker (not a visitor sitting opposite)?",
     "visitor_seated": "Is anyone sitting on the visitor side of the desk, across from the worker?",
     "at_safe": "Is a person standing at the small metal safe and using it right now?",
-    "id_shown": "Is the visitor showing or handing an ID card, a passport or another document to the worker, or is the worker looking at such a document?",
+    "id_shown": "Is the visitor showing an identity card or passport and is the cashier inspecting it? Banknotes, cash bundles, receipts and ordinary sheets of paper are NOT identity documents.",
     "handover": "Is the visitor handing money, a bag or a package to the worker or putting it on the desk?",
     "two_visitors": "Are there two different visitors at the worker's desk at the same time (besides the worker)?",
     "merging": "Is the worker putting one stack of banknotes on top of another stack, combining two piles of money into one?",
@@ -66,18 +68,28 @@ class Finding:
 class Budget:
     def __init__(self, deadline: float):
         self.deadline = deadline
+        self.skipped = 0
 
     def left(self) -> float:
         return self.deadline - time.time()
 
     def ok(self, need: float = 2.0) -> bool:
-        return self.left() > need
+        result = self.left() > need
+        if not result:
+            self.skipped += 1
+        return result
 
 
 class Analyzer:
     def __init__(self):
         self.det = Detector(config.DETECTOR_ID)
         self.vlm = VLM(config.VLM_ID, four_bit=config.VLM_4BIT)
+        try:
+            from .hands import HandContact
+            self.hands=HandContact(config.POSE_PATH)
+        except Exception as exc:
+            self.hands=None
+            emit('inference','hand_detector_unavailable',error=str(exc))
         self.trace = []
         self.scene, self.room_tracks = {}, []
 
@@ -86,7 +98,9 @@ class Analyzer:
         t0 = time.time()
         budget = Budget(job.deadline - 20)  # keep 20 s for encoding the report
         self.vlm.calls, self.trace = 0, []
+        self.ambiguities=[]
         partial = False
+        issues, coverage = [], []
 
         job.stage, job.progress = "decoding", 0.05
         clip = video.sample(path, config.SAMPLE_FPS)
@@ -99,10 +113,25 @@ class Analyzer:
         scene = self._scene(clip, raw)
         self.scene = scene
         people = self._room_people(raw, scene, clip)
+        self.people=people
 
         job.stage, job.progress = "checks", 0.4
         tl = self._timeline(clip, people, scene)
         findings: list[Finding] = []
+        from . import temporal
+        contexts, observations = [], []
+        try:
+            emit("inference", "stage", stage="temporal_events", job_id=getattr(job, "id", "evaluation"))
+            contexts, observations, temp_issues = temporal.extract(self, clip, tl, budget)
+            issues.extend(temp_issues)
+            if budget.ok(8):
+                ff, ii = temporal.findings(self, clip, observations)
+                findings.extend(ff)
+                issues.extend(ii)
+        except Exception as exc:
+            partial = True
+            issues.append(f"Временные события: {type(exc).__name__}")
+            log.exception("temporal extraction failed")
         checks = [self._check_departures, self._check_changeover, self._check_entries, self._check_service,
                   self._check_periodic]
         for i, chk in enumerate(checks):
@@ -111,12 +140,40 @@ class Analyzer:
                 log.warning("deadline: skipping %s and later checks", chk.__name__)
                 break
             try:
+                previous_skips = budget.skipped
+                emit("inference", "stage", stage=chk.__name__, job_id=getattr(job, "id", "evaluation"))
                 findings += chk(clip, people, scene, tl, budget)
-            except Exception:
+                coverage.append({"check": chk.__name__, "status": "partial" if budget.skipped > previous_skips else "completed"})
+                partial |= budget.skipped > previous_skips
+            except Exception as exc:
+                partial = True
+                coverage.append({"check": chk.__name__, "status": "failed", "reason": type(exc).__name__})
                 log.exception("check %s failed; continuing", chk.__name__)
             job.progress = 0.4 + 0.5 * (i + 1) / len(checks)
 
         job.stage = "report"
+        partial |= budget.skipped > 0
+        issues.extend(self.ambiguities)
+        if clip.duration - clip.times[-1] > max(2, 2 / config.SAMPLE_FPS):
+            partial = True
+            issues.append("Видео длиннее проанализированного отрезка")
+        if not scene:
+            issues.append("Не удалось определить объекты кассового рабочего места")
+        for anchor, label in (("desk", "рабочий стол"), ("safe", "сейф"), ("laptop", "экран рабочего места"), ("door", "дверь")):
+            if anchor not in scene:
+                issues.append(f"Не удалось локализовать {label}; связанные проверки недоступны для этого ракурса")
+        if any(o['scores'].get('cash_safe', 0) >= .7 for o in observations) and not any(o['scores'].get('machine', 0) >= .6 for o in observations):
+            issues.append("Видно перемещение денег к сейфу, но полный машинный пересчёт по выбранным кадрам не подтверждён; проверьте T15")
+        if any(c["context"] == "unknown" for c in contexts):
+            issues.append("Контекст части ролика не определён")
+        from .features import make_windows, apply_classifier
+        windows = make_windows(clip.duration, self.trace, contexts, tl)
+        findings=self._merge(findings)
+        base_predictions = [{'type': f.type_id, 't': f.t, 'conf': f.conf} for f in findings]
+        base_review_required=bool(partial or issues)
+        base_verdict = 'violation' if base_predictions else 'needs_review' if partial or issues else 'no_violation'
+        findings, classifier_issues = apply_classifier(windows, getattr(job, "version", None), clip,findings)
+        issues.extend(classifier_issues)
         findings = self._merge(findings)
         violations = []
         for f in findings:
@@ -125,9 +182,16 @@ class Analyzer:
             violations.append(build_violation(f.type_id, f.t, f.observed, frames, f.conf))
         log.info("analysis done in %.1fs, vlm calls=%d, findings=%d, partial=%s",
                  time.time() - t0, self.vlm.calls, len(violations), partial)
-        out = {"verdict": "violation" if violations else "no_violation", "violations": violations,
+        out = {"verdict": "violation" if violations else "needs_review" if partial or issues else "no_violation", "violations": violations,
                "partial": partial, "video_duration_sec": round(clip.duration, 1),
-               "processing_time_sec": round(time.time() - t0, 1)}
+               "processing_time_sec": round(time.time() - t0, 1), "review_reasons": list(dict.fromkeys(issues)),
+               "contexts": contexts, "events": observations, "checks": coverage,
+               "confidence_kind": "uncalibrated_score", "_windows": windows,
+               "_trace": self.trace, "feature_schema": "events-v1",
+               "_base_predictions": base_predictions, "_base_verdict": base_verdict,
+               "_base_review_required":base_review_required}
+        from ..versions import engine_fingerprint
+        out['_extractor'] = engine_fingerprint()
         if config.DEBUG:
             out["debug"] = {"scene": {k: [int(v) for v in b] for k, b in scene.items()},
                             "n_people": [round(float(x), 1) for x in tl["n"]],
@@ -479,6 +543,15 @@ class Analyzer:
                                                "выглядит открытой",
                                                [(self._idx(clip, i + left), None),
                                                 (self._idx(clip, i + left + 4), door)]))
+            elif "door" in scene and budget.ok(5):
+                # Occupied rooms also need a door-state check after an entry.
+                a, b = self._idx(clip, i + int(3*config.SAMPLE_FPS)), self._idx(clip, i + int(5*config.SAMPLE_FPS))
+                pa = self._ask_crop(clip, a, scene["door"], "door_open", margin=.05)
+                pb = self._ask_crop(clip, b, scene["door"], "door_open", margin=.05)
+                if min(pa,pb) >= .9 and b > a:
+                    out.append(Finding("T07_CASH_ROOM_DOOR_NOT_CLOSED", clip.times[a], min(pa,pb),
+                        "После входа человека дверь кассового помещения выглядит открытой на двух последовательных проверках",
+                        [(a,scene["door"]),(b,scene["door"])]))
         return out
 
     def _check_service(self, clip, people, scene, tl, budget):
@@ -493,17 +566,19 @@ class Analyzer:
         for s, e in sorted(segs):
             end = min(e + 1, s + int(20 * config.SAMPLE_FPS))
             id_max, hand_at = 0.0, None
+            inspected = []
             for k in range(s, end, step):
                 if not budget.ok(6):
                     break
                 id_max = max(id_max, self._ask_full(clip, k, "id_shown"))
+                inspected.append(k)
                 if id_max >= TH["id_shown"]:
                     break
                 if hand_at is None and (k - s) % (2 * step) == 0 and \
                         self._ask_full(clip, k, "handover") >= TH["handover"]:
                     hand_at = k
             # the episode must have been scanned for a while (>= 8 s) before claiming "no ID seen"
-            scanned = (min(end, e + 1) - s) >= int(8 * config.SAMPLE_FPS)
+            scanned = len(inspected) >= 8 and clip.times[inspected[-1]] - clip.times[inspected[0]] >= 7
             # a visitor must really be there (the person count can include a stray track)
             mid = self._idx(clip, (s + min(end, e)) // 2)
             if id_max < TH["id_shown"] and scanned and budget.ok(4) and \
@@ -527,8 +602,15 @@ class Analyzer:
             if tl["n"][i] >= 1 and self._ask_full(clip, i, "drinking") >= TH["drinking"]:
                 p1 = self.trace[-1][2]
                 j = self._idx(clip, i + 2)    # confirm ~1 s later: a hand near the face is not drinking
-                if self._ask_full(clip, j, "drinking") >= TH["drinking"]:
-                    out.append(Finding("T11_FOOD_DRINK_AT_DESK", clip.times[i], min(p1, self.trace[-1][2]),
+                p2 = self._ask_full(clip, j, "drinking")
+                cup = self._ask_full(clip, i, "cup_in_hand")
+                paper=0.
+                if p2>=TH['drinking'] and cup>=.7 and 'desk' in scene:
+                    paper=max(self._ask_crop(clip,k,scene['desk'],'banknotes_in_hand',margin=.3) for k in (i,j,self._idx(clip,i+4)))
+                    if paper>=.8:
+                        self.ambiguities.append(f'{clip.times[i]:.1f} с: предмет в руках похож и на банкноты, и на чашку; питьё не подтверждено')
+                if p2 >= TH["drinking"] and cup >= .7 and paper < .8:
+                    out.append(Finding("T11_FOOD_DRINK_AT_DESK", clip.times[i], min(p1, p2, cup),
                                        "На видео работник за рабочим столом пьёт из чашки", [(i, None), (j, None)]))
             if self._ask_full(clip, i, "personal") >= TH["personal"]:
                 p1 = self.trace[-1][2]

@@ -1,4 +1,6 @@
-# Architecture (Phase 3)
+# Architecture (Phase 3, historical)
+
+> This document describes the original prototype. For the current ChipTRick implementation, accounts, feedback, training, versioning and limitations, see `CHIPTRICK_GUIDE.md`. Hardware and queue semantics below are historical and do not describe the current machine.
 
 ## 1. Constraints that shaped the design
 
